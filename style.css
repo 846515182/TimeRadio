@@ -1128,6 +1128,34 @@ footer { margin-top: 14px; }
   border: 1px solid rgba(52, 211, 153, .55);
   box-shadow: 0 0 12px rgba(52, 211, 153, .35);
 }
+
+/* —— 三个状态药丸：底色和字色**成对**写死 ——
+   用户报「缓冲中 字根本看不清」，根因不是配色难看，是**看不见**：
+   上面这条 .stage .status 与 .status.loading 特异性同为 (0,2,0)，而它位置靠后 →
+   背景被换成 18% 半透明绿，color 却没跟着改，.status.loading 残留的近黑
+   #3b2f04 压在 #cover 的 #0c0820 深底上 = 对比度 1.10:1。
+   .status.live 的 #052e1f 同一张底 = 1.03:1，用户没报但一样是隐形的。
+   修法：用 (0,3,0) 同时压过上面两条，每个状态自带可读前景色
+   （实测 live 10.8:1 / loading 11.0:1 / error 12.5:1，WCAG 底线 4.5:1）。 */
+.stage .status.live {
+  background: rgba(52, 211, 153, .20);
+  color: #a7f3d0;
+  border-color: rgba(52, 211, 153, .65);
+  box-shadow: 0 0 12px rgba(52, 211, 153, .38);
+}
+.stage .status.loading {
+  background: rgba(250, 204, 21, .18);
+  color: #fde68a;
+  border-color: rgba(250, 204, 21, .62);
+  box-shadow: 0 0 12px rgba(250, 204, 21, .38);
+}
+.stage .status.error {
+  background: rgba(244, 63, 94, .26);
+  color: #ffe4e6;
+  border-color: rgba(244, 63, 94, .72);
+  box-shadow: 0 0 12px rgba(244, 63, 94, .42);
+}
+
 .song-meta { margin-top: 9px; }
 
 /* —— 接下来：横向滑动歌单 —— */
@@ -2238,10 +2266,12 @@ body.track-change #cover {
   overflow: visible;
 }
 
-/* 三条线共用画法。stroke 走渐变（紫→青→粉→金），比单色更有「一条线」的层次，
-   也顺手把原来 --cover-hue「随歌变色」的那股劲儿接了过来。 */
+/* 柱波两层共用画法。stroke 走渐变（紫→青→粉→金）—— 沿 x 方向铺开，
+   整排柱子从左到右换色，顺手把原来 --cover-hue「随歌变色」那股劲儿接了过来。
+   柱头不靠 border-radius（那是给盒模型的），靠 stroke-linecap:round ——
+   一条 path 就能装下全部柱子，每帧只改一次 d，老 WebView 也跟得上。 */
 .wave .wave-main,
-.wave .wave-ghost {
+.wave .wave-rest {
   fill: none;
   stroke: url(#wGradHero);
   stroke-linecap: round;
@@ -2249,13 +2279,15 @@ body.track-change #cover {
 }
 
 .wave .wave-main {
-  stroke-width: 3.6;
+  stroke-width: 2.8;
   filter: drop-shadow(0 0 7px rgba(139, 92, 246, .6));
 }
 
-.wave .wave-ghost { stroke-width: 1.6; opacity: .5; }
-.wave .wave-ghost.g1 { filter: blur(1.4px); opacity: .55; }
-.wave .wave-ghost.g2 { filter: blur(2.4px); opacity: .34; }
+/* 还没播到的部分：同形状、压暗压细，让「播放头扫过 = 点亮」读得出来 */
+.wave .wave-rest { stroke-width: 2.2; opacity: .28; }
+
+/* 播放头：一小截亮竖条 */
+.wave .wave-head { fill: #fff; opacity: .85; }
 
 /* 减少动效偏好：波浪停在静态那一帧（画是画好的，只是不再流） */
 @media (prefers-reduced-motion: reduce) {
@@ -2538,32 +2570,28 @@ body.track-change #cover {
 /* 状态药丸（「直播中」）回到条子左上角：波浪两端本来就收细，压不着字 */
 #cover .status { top: 7px; left: 9px; }
 
-/* —— ③ 波浪容器：铺满条子，纵向留足鼓包的空间 ——
-   振幅上限由 app.js 的 waveAmpTarget 定（v1.21.33：静止 0.5 ≈ 一条平线，
-   播放时按这首歌的真实响度在 1.5~24 之间走），viewBox 仍是 0 0 320 96：
-   三条正弦叠加的峰值系数约 1.6，24 × 1.6 ≈ 38，落在 48±48 里很宽松，
-   那点溢出交给 overflow:visible。 */
+/* —— ③ 波浪容器：铺满条子，纵向留足柱子的空间 ——
+   柱子半高上限由 app.js 的 WAVE_AMP_MAX 定（静止 WAVE_REST 0.6 ≈ 一条平线，
+   播放时按这首歌的真实响度在 0.6~24.6 之间走），viewBox 仍是 0 0 320 96：
+   中线 48 ± 24.6 落在 0~96 里很宽松，那点溢出交给 overflow:visible。 */
 .wave {
   left: 3%;
   right: 3%;
   height: 76%;
 }
 
-/* —— ④ 霓虹：主线加粗 + 三道同色系外发光，残影加粗加糊做光晕 ——
-   用户原话「太丑了」。原来是单层紫色 drop-shadow，看着像根划上去的线；
-   现在主线 4.4px 并叠青/紫/粉三道外发光，残影加大模糊度当光晕，
-   才有「一根亮着的灯管」的质感。 */
+/* —— ④ 霓虹：点亮层加粗 + 两道外发光，暗层压暗 ——
+   v1.21.35 换成柱波后只留两道 drop-shadow：柱子是一排子路径，
+   三道叠着在老 WebView 上会掉帧，而光晕的收益远小于画一条线时那么明显。 */
 .wave .wave-main {
-  stroke-width: 4.4;
+  stroke-width: 2.9;
   filter:
-    drop-shadow(0 0 4px rgba(34, 211, 238, .95))
-    drop-shadow(0 0 14px rgba(139, 92, 246, .75))
-    drop-shadow(0 0 30px rgba(236, 72, 152, .35));
+    drop-shadow(0 0 4px rgba(34, 211, 238, .9))
+    drop-shadow(0 0 14px rgba(139, 92, 246, .7));
 }
 
-.wave .wave-ghost { stroke-width: 2.6; opacity: .55; }
-.wave .wave-ghost.g1 { opacity: .6; filter: blur(2.4px); }
-.wave .wave-ghost.g2 { opacity: .42; filter: blur(4px); }
+.wave .wave-rest { stroke-width: 2.3; opacity: .26; }
+.wave .wave-head { fill: #ffffff; opacity: .92; }
 
 /* —— ⑤ 排队字幕轨：紧跟波浪下沿，通栏宽 ——
    id 没变（queueRail / railTick / railTickTrack / queueRailEmpty），

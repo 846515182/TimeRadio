@@ -48,12 +48,18 @@
                通栏的横向波浪条。#cover 的形态（全宽 / 18px 圆角 /
                overflow:visible 让辉光外溢）收口在 style.css 末尾
                「v1.21.31 中间大重排」那段覆盖。 -->
-          <!-- v1.21.19：首页大头像换成音乐波形。主播照片撤掉，
-               封面中央是一组随歌变色、播放时跳动的波形柱 —— 电台该有的样子。 -->
-          <!-- v1.21.30：圆盘里那组柱状波形换成**一条横向波浪线**（开花的样子）。
-               用户原话「圆的音乐旋律动画可以改成那种一条线的波浪开花样子」。
-               形状不写死：app.js 每帧算多条正弦叠加 + 中间鼓起来的包络，
-               播放时鼓、暂停时摊平。三条路径是同一朵波的三层（主 + 两道残影）。 -->
+          <!-- v1.21.19：首页大头像换成音乐波形。主播照片撤掉 —— 电台该有的样子。
+               v1.21.30：圆盘里那组柱状波形换成一条横向波浪线（后被 v1.21.35 撤掉）。
+               v1.21.35：那条线连着被否两次（用户原话「太丑了」），换成
+               **整首镜像柱波 + 播放头**（SoundCloud 同款做法：波形在服务端
+               预计算好下发，客户端只负责渲染）。服务端 env_of 早把整首的响度
+               曲线随 air 下发了，现在直接画成形状本身 —— 不再拿真数据去调
+               一条正弦的振幅（数据真、形状假，这才是「看着假」的根子）。
+               三根 path 各司其职：wave-rest = 还没播到（压暗）、
+               wave-main = 播过的（点亮）、wave-head = 播放头。
+               柱子靠 stroke-linecap:round 出圆头，一条 path 装下全部柱子，
+               每帧只改一次 d —— 不用 canvas roundRect（Chrome 99+，这台跑不了），
+               全程也不碰 AudioContext（接上会被 WebView 掐掉声音且回不去）。 -->
           <div class="wave" id="coverWave" aria-hidden="true">
             <svg class="wave-svg" viewBox="0 0 320 96" preserveAspectRatio="none">
               <defs>
@@ -64,9 +70,9 @@
                   <stop offset="100%" stop-color="#fbbf24" />
                 </linearGradient>
               </defs>
-              <path class="wave-ghost g1" />
-              <path class="wave-ghost g2" />
+              <path class="wave-rest" />
               <path class="wave-main" />
+              <rect class="wave-head" x="320" y="12" width="1.8" height="72" />
             </svg>
           </div>
           <span class="status" id="status">正在接通直播…</span>

@@ -2116,6 +2116,35 @@ function icyYield(yieldNow) {
  * 锁屏就再也没声。1.5 秒还没自己起来就走重连通道接回。 */
 let pauseRecover = null;
 
+/* v1.21.35：切后台 / 锁屏被按停之后，**先试着就地接上**，别一上来就整条流拆了重连。
+ *
+ * 用户报「切换 app 也会暂停播放」。查下来我们自己这条链路里**没有任何一处**会在
+ * 切 App 时调 pause()：__svcPause 故意留空（直播不可暂停）、MainActivity 没有任何
+ * 生命周期覆盖（从不调 webView.onPause()）、AndroidIcy.stop() 只在用户主动暂停或
+ * 出错时才走。所以停我们的不是代码，是 WebView 在页面隐藏时按的那一下 ——
+ * 跟 v1.21.10「锁屏时 WebView 偶尔会把 audio 直接按停」是同一家。
+ *
+ * 而现有的两条补救（pauseRecover 定时器 / 回前台）一律走 handleStreamError()，
+ * 那是**整条流拆掉重接**（beginSwitch + attach + 重试退避）：一来好几秒、
+ * 屏幕还弹「接回直播…」。可多数情况下媒体管线根本没坏，只是被按了暂停 ——
+ * audio.play() 就地续播：不重建连接、不换源、几乎立刻出声。
+ * 续不上（管线真挂了 / 老内核没有 Promise）才回落那条重连通道，两条路都不放过。 */
+function resumeInPlaceOrRecover() {
+  if (!audio || !shouldPlay || inSwitch()) return false;
+  if (!audio.paused) return false;          // 自己已经起来了，不用管
+  if (audio.error) return false;            // 元素真挂了：直接交给重连通道
+  let pr = null;
+  try { pr = audio.play(); } catch (_) { pr = null; }
+  if (!pr || typeof pr.then !== 'function') return false;   // 老内核没有 Promise
+  pr.then(function () {
+    /* 就地接上了 —— 出声那一刻 playing 事件会自己刷状态，这里不用做任何事 */
+  }, function () {
+    /* 续不上 = 管线确实坏了：回落整条流重连（内部有 shouldPlay / 代际兜底） */
+    if (shouldPlay && audio.paused && !inSwitch() && !retryTimer) handleStreamError();
+  });
+  return true;
+}
+
 audio.addEventListener('playing', () => {
   retries = 0;
   clearTimeout(pauseRecover);
@@ -2147,8 +2176,11 @@ audio.addEventListener('pause', () => {
     pauseRecover = setTimeout(() => {
       pauseRecover = null;
       if (shouldPlay && audio.paused && !inSwitch()) {
-        setStatus('loading', '接回直播…');
-        handleStreamError();
+        // v1.21.35：先就地续播（不拆流、几乎立刻出声）；续不上才拆流重连
+        if (!resumeInPlaceOrRecover()) {
+          setStatus('loading', '接回直播…');
+          handleStreamError();
+        }
       }
     }, 1500);
   } else {
@@ -2157,12 +2189,16 @@ audio.addEventListener('pause', () => {
 });
 
 /* 回前台发现「该在播却没在播」（熄屏期间被系统停掉、重连定时器被节流）：
- * 立刻走重连通道接上，别等用户自己发现没声 —— 「锁屏还会停」的另一半。 */
+ * 立刻走重连通道接上，别等用户自己发现没声 —— 「锁屏还会停」的另一半。
+ * v1.21.35：这一下是最常见的「切 App 被按停」，同样先就地续播（不拆流、
+ * 几乎立刻出声），续不上再走 handleStreamError 那条重连通道。 */
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
   if (shouldPlay && audio.paused && !retryTimer && !inSwitch()) {
-    setStatus('loading', '接回直播…');
-    handleStreamError();
+    if (!resumeInPlaceOrRecover()) {
+      setStatus('loading', '接回直播…');
+      handleStreamError();
+    }
   }
 });
 
@@ -2429,7 +2465,7 @@ function currentVersion() {
       if (v) return v;
     }
   } catch (_) { /* 忽略 */ }
-  return '1.21.34'; // 网页版：与 manifest versionName 同步维护
+  return '1.21.35'; // 网页版：与 manifest versionName 同步维护
 }
 
 let updateUrl = '';
@@ -2616,13 +2652,18 @@ function wireUpdate() {
 }
 wireUpdate();
 
-/* ==================== 波浪动效（v1.21.30 起，v1.21.33 大改） ====================
+/* ==================== 波形（v1.21.30 起，v1.21.35 换形） ====================
  * 用户原话（v1.21.33）：「那个波浪线丑的要死 我记得应该是一条横线 然后跟着这个
- *   歌曲的旋律 连绵起伏的那种感觉」。
+ *   歌曲的旋律 连绵起伏的那种感觉」；（v1.21.35）「那个音频线太丑了……重新设计」。
  *
- * 也就是说：**静止时是一条平的横线**，一播放就跟着**这首歌真实的声音**起伏。
- * 老版是三条正弦按固定速度自己飘（振幅只在「暂停 8 / 播放 32」之间跳），跟歌
- * 零关系 —— 用户看着假，因为它确实是假的。
+ * v1.21.33 把「三条正弦自己飘」改成了「按真实响度调振幅」—— 数据真了，
+ * 但**形状还是正弦**。连着两版被否，根子在这里：**正弦波不是任何一首歌的样子**。
+ * 手上有整首的响度曲线，却只拿它去调一条假波形的振幅，等于把真数据浪费了。
+ *
+ * v1.21.35 换成 **整首镜像柱波 + 播放头**（SoundCloud 同款做法：波形在服务端
+ * 预计算好下发，客户端只负责渲染）：整首切成 WAVE_BARS 根竖柱，上下对称，
+ * 柱高 = 那一刻的响度；播放头从左扫到右，扫过的点亮、没到的压暗。
+ * **静止时柱子全部塌成一条横线**（就是用户要的那条横线）。
  *
  * 真实数据从哪来：服务端在烤片时就把这首的响度曲线算好（server.py 的 env_of，
  * 20 点/秒），随 air 消息的 `env` 字段发下来。
@@ -2631,29 +2672,37 @@ wireUpdate();
  * 一旦接上，部分 WebView 会**直接把声音掐掉**，而且接上就回不去 —— 画个动画
  * 把电台听没了，不划算。数据从服务器来，客户端一个字节的音频都不碰。
  *
+ * 为什么用 SVG 柱子而不是 canvas：柱头靠 stroke-linecap:round 出圆角 ——
+ * 一条 path 装下全部柱子，每帧只改一次 d。canvas 的 roundRect 是 Chrome 99+，
+ * 这台 WebView 跑不了；SVG 这条路老内核也跟得上。
+ *
  * env 的格式：一串 ASCII，每点一个字符，chr(33+level)，level 0~93。
- * 没有 env（老成片 / 服务器没算出来）就回落老的「自己飘」，行为不回退。 */
-const WAVE_W = 320;      // viewBox 宽（两点定曲线的横坐标范围）
+ * 没有 env（老成片 / 服务器没算出来）→ 整首当满响画（仍是「有东西在动」，
+ * 不是死线），行为不回退。 */
+const WAVE_W = 320;      // viewBox 宽
 const WAVE_MID = 48;     // viewBox 高的一半 = 静止时那条横线的高度
-const WAVE_N = 44;       // 采样点：够顺，又不至于让老机子掉帧
-const WAVE_X = [];       // x 坐标预存成字符串，避免每帧重复 toFixed
-for (let wi = 0; wi <= WAVE_N; wi++) WAVE_X.push(((wi / WAVE_N) * WAVE_W).toFixed(1));
+const WAVE_BARS = 72;    // 整首切多少根柱子（390 宽下约 5.4px 一根，柱宽 2.9）
+const WAVE_BAR_X = [];   // 每根柱子的 x 预存成字符串，避免每帧重复 toFixed
+for (let wi = 0; wi < WAVE_BARS; wi++) {
+  WAVE_BAR_X.push((((wi + 0.5) / WAVE_BARS) * WAVE_W).toFixed(1));
+}
 
-const WAVE_REST = 0.5;   // 静止振幅：近乎平的一条线（用户要的「一条横线」）
-const WAVE_AMP_MAX = 24; // 播放时振幅上限（中线 48、viewBox 高 96，留够又不撞边）
+const WAVE_REST = 0.6;   // 静止时的半高：近乎一条平线（用户要的「一条横线」）
+const WAVE_AMP_MAX = 24; // 满响时的半高（中线 48、viewBox 高 96，留够又不撞边）
 const ENV_HZ = 20;       // 服务端 env 的采样率，两边必须一致
 
 let waveEnv = '';        // 当前这首的响度曲线（一串 ASCII，没曲线就是空串）
 let waveEnvDur = 0;      // 这首的时长（秒）：越界就不取了
 let waveEnvStart = 0;    // 开播时刻（ms），跟 airProgress 同源
 
-/** air 换一首就换一条线。body 缺失时清空（回落老的自己飘）。 */
+/** air 换一首就换一条波形。body 缺失时清空（回落「整首满响」，仍是活的）。 */
 function setWaveEnv(body) {
   waveEnv = (body && body.env) ? String(body.env) : '';
   const d = Number(body && body.dur) || 0;
   const s = Number(body && body.startedAt) || 0;
   waveEnvDur = d > 0 ? d : 0;
   waveEnvStart = s > 0 ? s : 0;
+  bakeWaveBars();   // 曲线换了才重算柱高；每帧只做缩放，不再逐帧查表
 }
 
 /** 第 t 秒那一拍的响度。返回 [0,1]；**没有曲线时返回 -1**。
@@ -2675,27 +2724,41 @@ function envAt(t) {
   return v < 0 ? 0 : (v > 1 ? 1 : v);
 }
 
-/** amp 振幅 / phase 相位 / freq 频率 → 一条 path 的 d。
- *  v1.21.33：不再做「中间鼓两头收」的开花包络 —— 那是上一版被用户否掉的样子，
- *  现在整条线一样粗细，就是「一条横线」，起伏完全由音乐的响度决定。 */
-function waveD(amp, phase, freq) {
+let waveBars01 = null;     // 每根柱子的响度 [0,1]：换歌时算一次，每帧只做缩放
+
+/** 换歌时把整首的响度曲线切成一根根柱子的高度。
+ *  老成片 / 服务器没下发曲线：整首当满响画（仍是「有东西在动」，不是死线）。
+ *  下发了曲线就**逐根**按位置查表 —— 曲线里写着 0 的那一拍就是这首歌真安静，
+ *  那根柱子就该短，绝不许兜底成最大（wave-gate 实测过「越安静越鼓」那个坑）。 */
+function bakeWaveBars() {
+  const n = WAVE_BARS;
+  const have = !!(waveEnv && waveEnvDur > 0);
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const lvl = have ? envAt((i / n) * waveEnvDur) : -1;
+    out[i] = lvl >= 0 ? lvl : 1;
+  }
+  waveBars01 = out;
+}
+
+/** 第 [from, to) 根柱子 → 一条 path 的 d。
+ *  scale = 整体缩放，静止时逼近 0 → 柱子全塌成一条横线（用户要的那条横线）。 */
+function waveBars(from, to, scale) {
   let d = '';
-  for (let i = 0; i <= WAVE_N; i++) {
-    const x = i / WAVE_N;
-    const y = WAVE_MID + amp * (
-        Math.sin(x * 6.2831853 * freq + phase)
-      + Math.sin(x * 6.2831853 * freq * 2.3 + phase * 1.7) * 0.34
-      + Math.sin(x * 6.2831853 * freq * 0.55 - phase * 0.9) * 0.55);
-    d += (i ? 'L' : 'M') + WAVE_X[i] + ',' + (Math.round(y * 100) / 100);
+  const hs = waveBars01;
+  if (!hs) return d;
+  for (let i = from; i < to; i++) {
+    const h = Math.round((WAVE_REST + hs[i] * WAVE_AMP_MAX * scale) * 100) / 100;
+    d += 'M' + WAVE_BAR_X[i] + ',' + (WAVE_MID - h)
+       + 'L' + WAVE_BAR_X[i] + ',' + (WAVE_MID + h);
   }
   return d;
 }
 
-let waveT = 0;             // 相位随时间往前走（就是「波在流」）
-let waveAmp = WAVE_REST;   // 当前振幅：向目标平滑逼近，开播/暂停都不许有跳变
-let waveAmpTarget = WAVE_REST;
+let waveAmp = 0;           // 当前缩放：0 = 柱子塌成一条横线，1 = 按真实响度画满
+let waveAmpTarget = 0;
 let waveLast = 0;
-let wavePaths = null;      // [{main, g1, g2}]，算一次缓存起来
+let wavePaths = null;      // [{main, rest, head}]，算一次缓存起来
 
 function collectWaves() {
   const out = [];
@@ -2705,25 +2768,35 @@ function collectWaves() {
       const main = svgs[i].querySelector('.wave-main');
       if (!main) continue;
       out.push({ main: main,
-                 g1: svgs[i].querySelector('.wave-ghost.g1'),
-                 g2: svgs[i].querySelector('.wave-ghost.g2') });
+                 rest: svgs[i].querySelector('.wave-rest'),
+                 head: svgs[i].querySelector('.wave-head') });
     }
   } catch (_) { /* 老内核没有 querySelectorAll：动画是锦上添花，绝不许拖垮页面 */ }
   return out;
 }
 
-/** 把当前这一帧的三条曲线写进 DOM。静态/动态共用这一个函数。 */
+/** 把当前这一帧写进 DOM。静态/动态共用这一个函数。
+ *  播放头左边的柱子写进 wave-main（点亮），右边的写进 wave-rest（压暗）。
+ *  head 默认 1（还没收到 air）：这时**全部**柱子都给 main —— layout-gate 钉着
+ *  「静止时 path 的 d 不许是空串」，若默认切在 0，main 就恒为空。 */
 function drawWave() {
   if (!wavePaths) wavePaths = collectWaves();
   if (!wavePaths.length) return;
-  const dm = waveD(waveAmp, waveT, 1.15);
-  const d1 = waveD(waveAmp * 0.62, waveT - 1.1, 0.9);
-  const d2 = waveD(waveAmp * 0.4, waveT + 1.6, 1.6);
+  if (!waveBars01) return;
+  let head = 1;
+  if (waveEnvDur > 0 && waveEnvStart > 0) {
+    head = (Date.now() - waveEnvStart) / 1000 / waveEnvDur;
+    if (!(head >= 0)) head = 0; else if (head > 1) head = 1;
+  }
+  const cut = Math.round(head * WAVE_BARS);
+  const dm = waveBars(0, cut, waveAmp);
+  const dr = waveBars(cut, WAVE_BARS, waveAmp);
+  const hx = (head * WAVE_W).toFixed(1);
   for (let i = 0; i < wavePaths.length; i++) {
     const w = wavePaths[i];
     if (w.main) w.main.setAttribute('d', dm);
-    if (w.g1) w.g1.setAttribute('d', d1);
-    if (w.g2) w.g2.setAttribute('d', d2);
+    if (w.rest) w.rest.setAttribute('d', dr);
+    if (w.head) w.head.setAttribute('x', hx);
   }
 }
 
@@ -2735,24 +2808,14 @@ function waveFrame(ts) {
   let playing = false;
   try { playing = !!(document.body && document.body.classList
                      && document.body.classList.contains('playing')); } catch (_) { /* 忽略 */ }
-  if (playing) {
-    /* 这首播到第几秒 → 去曲线里取那一拍的响度。startedAt 是服务端的墙钟，
-     * 进度条怎么算位置，波浪就怎么算位置（同一个 airProgress 数据源）。
-     * 取不到曲线就用满振幅回落，绝不因为没数据就不动。 */
-    let lvl = -1;                       // -1 = 拿不到曲线（真没数据）
-    if (waveEnv && waveEnvStart > 0 && waveEnvDur > 0) {
-      const pos = (Date.now() - waveEnvStart) / 1000;
-      if (pos >= 0 && pos <= waveEnvDur + 1) lvl = envAt(pos);
-    }
-    /* 只有**真拿不到曲线**才回落满振幅（老成片）。曲线里写着 0 的那一拍就是
-     * 这首歌真安静 —— 那时候该是平线，不许兜底成最大。 */
-    waveAmpTarget = lvl >= 0 ? Math.max(1.2, lvl * WAVE_AMP_MAX) : WAVE_AMP_MAX;
-  } else {
-    waveAmpTarget = WAVE_REST;
-  }
-  /* 平滑逼近：曲线 20 拍/秒，这里 6/s 的速度贴上去，既跟得上又不抖 */
+  /* 柱高是换歌时按位置查好表的（见 bakeWaveBars），这里只管「起没起」：
+   * 播放就把整首按真实响度画满，暂停就塌成一条横线。
+   * 曲线里写着 0 的那一拍 = 这首歌真安静 = 那根柱子本来就短，
+   * 不存在「拿不到曲线就兜满振幅」的二次兜底 —— 那正是 wave-gate 实测抓到的
+   * 「越安静越鼓」。没下发曲线的整首满响，是在 bakeWaveBars 里一次性决定的。 */
+  waveAmpTarget = playing ? 1 : 0;
+  /* 平滑逼近：6/s 的速度贴上去，开播/暂停都不许有跳变 */
   waveAmp += (waveAmpTarget - waveAmp) * Math.min(1, dt * 6);
-  waveT += dt * (playing ? 3.2 : 0.2);
   drawWave();
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(waveFrame);
 }
@@ -2760,9 +2823,9 @@ function waveFrame(ts) {
 /** 开画：先静态落一帧（门禁与截图要读得到 d），有 rAF 再进动画循环。 */
 function startWave() {
   wavePaths = collectWaves();
-  waveAmp = WAVE_REST;
-  waveAmpTarget = WAVE_REST;
-  waveT = 0.35;
+  waveAmp = 0;
+  waveAmpTarget = 0;
+  bakeWaveBars();
   drawWave();
   if (typeof requestAnimationFrame !== 'function') return;   // 沙箱里没有 rAF：画一帧就收，不挂定时器
   requestAnimationFrame(waveFrame);
