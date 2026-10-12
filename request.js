@@ -937,6 +937,24 @@
         ann: typeof j.ann === 'string' ? j.ann.slice(0, 240) : '',
         next: normNext(j.next),      // 「接下来」歌单（客户端那栏就靠它）
         wall: Array.isArray(j.wall) ? j.wall : [],   // 播出台账（撤单清扫用）
+        /* v1.21.37：这两个必须**显式放行** —— 上面是白名单式构造，字段不写在
+         * 这里就整包丢掉，而它们恰好都不在名单里。后果是两个特性静默失效：
+         *
+         * env（响度曲线：20 点/秒，每点一个字符 chr(33+level)，level 0~93）——
+         *   波形等化器的**唯一数据源**。服务端从 v1.21.33 起一直在认真下发
+         *   （实测 4899 / 5643 字符），客户端却一条都没收到过：setWaveEnv 拿到
+         *   的 body.env 恒为 undefined，波形回落成「满高静止」。用户连着四版
+         *   报「波形根本不会动」，真正的根因是这里，不是画法。
+         *   tools/air-env-probe.py 实测：直连引擎 24.6 / 0.61（正常），
+         *   走 onAirMsg 24.6 / 24.6（静止），airState 里 env 读出来是 undefined。
+         *   上限 20 万字符纯为防脏数据（约 100 分钟）；正常一首 3~8 分钟
+         *   只有 3600~9600 字符。
+         *
+         * stream —— 服务器回发的流地址（server.py air_body 里的 /stream）。
+         *   丢了它，app.js 的 `if (body.stream) streamPrimary = ...` 永远不执行，
+         *   「换 IP / 换隧道不用发版」这条兜底一直是死的，只能退到硬编码常量。 */
+        env: typeof j.env === 'string' ? j.env.slice(0, 200000) : '',
+        stream: typeof j.stream === 'string' ? j.stream.slice(0, 300) : '',
       };
       /* v1.21.27：air.next 里带歌手的条目回填到队列模型 —— 别人的单没走
          本机 onReady（r/* 只订阅自己的），排队行的歌手只能从这里来。 */
