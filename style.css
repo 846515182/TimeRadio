@@ -2289,6 +2289,13 @@ body.track-change #cover {
 /* 播放头：一小截亮竖条 */
 .wave .wave-head { fill: #fff; opacity: .85; }
 
+/* 心电图零位：中线那条虚线。折线上下摆动是相对它读出来的 ——
+   少了它，画面上只剩一条线，读不出「仪器正在记录」的意思。 */
+.wave .wave-base { stroke: #1e1e38; stroke-width: 1; stroke-dasharray: 3 5; }
+
+/* 笔尖：正被画出来的那一点。白、带辉光，跟着播放头走。 */
+.wave .wave-pen { fill: #ffffff; filter: drop-shadow(0 0 6px rgba(255,255,255,.95)); }
+
 /* 减少动效偏好：波浪停在静态那一帧（画是画好的，只是不再流） */
 @media (prefers-reduced-motion: reduce) {
   .rail-tick-track { animation: none !important; }

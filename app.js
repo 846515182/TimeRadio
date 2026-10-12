@@ -2465,7 +2465,7 @@ function currentVersion() {
       if (v) return v;
     }
   } catch (_) { /* 忽略 */ }
-  return '1.21.37'; // 网页版：与 manifest versionName 同步维护
+  return '1.21.38'; // 网页版：与 manifest versionName 同步维护
 }
 
 let updateUrl = '';
@@ -2701,13 +2701,47 @@ for (let wi = 0; wi < WAVE_BARS; wi++) {
   WAVE_BAR_X.push((((wi + 0.5) / WAVE_BARS) * WAVE_W).toFixed(1));
 }
 
-const WAVE_REST = 0.6;   // 静止时的半高：近乎一条平线（用户要的「一条横线」）
-const WAVE_AMP_MAX = 24; // 满响时的半高（中线 48、viewBox 高 96，留够又不撞边）
+/* 心电图摆幅：y = 中线 − (v − 0.5) × 本常数。
+ * v=0 贴底 y=92、v=1 贴顶 y=4，整条线撑满方框（96 高，上下各留 4 边距）。
+ *
+ * **这里必须是 88，不是 44。** 第一版我写成 44，是按「中线上下各 44」去理解的，
+ * 但公式里 (v − 0.5) 最多只能取到 ±0.5，真实摆幅只有 0.5 × 44 = 22 ——
+ * 线被锁死在 y 26~70，**只占方框 46%**，上下边永远够不着。
+ * 这个错是拿真实全曲 env 画成实照才量出来的（tools/ecg_try.py），
+ * 六档映射并排一比就露馅。88 = 96 − 2×4，正好顶到边。 */
+const WAVE_SWING = 88;
+/* scale 只把摆幅在 70%~100% 之间呼吸。下限 0.7 是结构性保险：哪怕 playing
+ * 判假、哪怕此刻真安静，线也永远是有起伏的形状，**不会**再塌成一条平线。 */
+const WAVE_FLOOR = 0.7;
 const ENV_HZ = 20;       // 服务端 env 的采样率，两边必须一致
 
 let waveEnv = '';        // 当前这首的响度曲线（一串 ASCII，没曲线就是空串）
 let waveEnvDur = 0;      // 这首的时长（秒）：越界就不取了
 let waveEnvStart = 0;    // 开播时刻（ms），跟 airProgress 同源
+
+/* 本曲自己的响度区间（10% / 90% 分位），换歌时算一次。
+ * 不同母带的响度能差 20dB —— 轻爵士那首按满量程线性映射，中段 50% 的点
+ * 会全挤在中线附近一条窄带里，画出来又是一条用户骂过的「中间的死线」。
+ * 取分位而不是 min/max：min/max 会被开头结尾的静音坑死，线会永远钉在上下边。
+ * 10%/90% 是通行做法（所有播放器画波形都这么干），**单调重映射，不编造数据**。 */
+let waveEnvLo = 0;
+let waveEnvHi = 93;
+
+function bakeEnvRange() {
+  const s = waveEnv;
+  if (!s || s.length < 8) { waveEnvLo = 0; waveEnvHi = 93; return; }
+  const lv = new Array(s.length);
+  for (let i = 0; i < s.length; i++) {
+    let v = s.charCodeAt(i) - 33;
+    lv[i] = v < 0 ? 0 : (v > 93 ? 93 : v);
+  }
+  lv.sort(function (a, b) { return a - b; });
+  const lo = lv[Math.floor(lv.length * 0.10)];
+  const hi = lv[Math.floor(lv.length * 0.90)];
+  waveEnvLo = lo;
+  /* 区间太窄（整首几乎一个响度）就撑开 8 格，避免除出个放大镜 */
+  waveEnvHi = (hi - lo >= 8) ? hi : lo + 8;
+}
 
 /** air 换一首就换一条波形。body 缺失时清空（回落「整首满响」，仍是活的）。 */
 function setWaveEnv(body) {
@@ -2716,7 +2750,15 @@ function setWaveEnv(body) {
   const s = Number(body && body.startedAt) || 0;
   waveEnvDur = d > 0 ? d : 0;
   waveEnvStart = s > 0 ? s : 0;
-  bakeWaveBars();   // 曲线换了才重算柱高；每帧只做缩放，不再逐帧查表
+  bakeEnvRange();    // 先定这首的响度区间（归一化的尺子）
+  bakeWaveBars();    // 再按位置切轮廓；每帧只做缩放，不再逐帧查表
+}
+
+/** 把原始响度格（0~93）按本曲区间映到 [0,1]，越界夹住。 */
+function envNorm(x) {
+  const span = waveEnvHi - waveEnvLo;
+  const v = (x - waveEnvLo) / (span > 0 ? span : 93);
+  return v < 0 ? 0 : (v > 1 ? 1 : v);
 }
 
 /** 第 t 秒那一拍的响度。返回 [0,1]；**没有曲线时返回 -1**。
@@ -2731,11 +2773,10 @@ function envAt(t) {
   if (i >= waveEnv.length) return 0;   // 过了片尾：按静音处理（平线）
   let a = waveEnv.charCodeAt(i) - 33;
   if (a < 0) a = 0; else if (a > 93) a = 93;
-  if (i + 1 >= waveEnv.length) return a / 93;
+  if (i + 1 >= waveEnv.length) return envNorm(a);
   let b = waveEnv.charCodeAt(i + 1) - 33;
   if (b < 0) b = 0; else if (b > 93) b = 93;
-  const v = (a + (b - a) * (p - i)) / 93;
-  return v < 0 ? 0 : (v > 1 ? 1 : v);
+  return envNorm(a + (b - a) * (p - i));
 }
 
 /** 现在播到第几秒（[0,1] 的进度比例）。没收到 air 时返回 1。
@@ -2754,28 +2795,53 @@ let waveBars01 = null;     // 整首的轮廓：每根柱子占多大比重，�
  *  老成片 / 服务器没下发曲线：整首当满响画（仍是「有东西在动」，不是死线）。
  *  下发了曲线就**逐根**按位置查表 —— 曲线里写着 0 的那一拍就是这首歌真安静，
  *  那根柱子就该短，绝不许兜底成最大（wave-gate 实测过「越安静越鼓」那个坑）。 */
+/** 没曲线（老成片 / 服务器没算出来）时的兜底轮廓：一条**固定**山形。
+ *  不冒充真数据 —— 真曲线一到就整条换掉。但它也绝不许是常数：常数画出来
+ *  是一条平线，那正是用户连续五版在骂的东西。三条不同频率的正弦叠加，
+ *  形状固定不飘（不假装会动），起伏靠 scale 呼吸。 */
+function decoContour(n) {
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const p = i / n;
+    let v = 0.50 + 0.28 * Math.sin(p * 11.3)
+               + 0.15 * Math.sin(p * 27.7 + 1.1)
+               + 0.09 * Math.sin(p * 61.1 + 2.3);
+    out[i] = v < 0.06 ? 0.06 : (v > 1 ? 1 : v);
+  }
+  return out;
+}
+
 function bakeWaveBars() {
   const n = WAVE_BARS;
   const have = !!(waveEnv && waveEnvDur > 0);
+  if (!have) { waveBars01 = decoContour(n); return; }
   const out = new Array(n);
   for (let i = 0; i < n; i++) {
-    const lvl = have ? envAt((i / n) * waveEnvDur) : -1;
-    out[i] = lvl >= 0 ? lvl : 1;
+    const lvl = envAt((i / n) * waveEnvDur);
+    out[i] = lvl >= 0 ? lvl : 0.5;
   }
   waveBars01 = out;
 }
 
-/** 第 [from, to) 根柱子 → 一条 path 的 d。
- *  轮廓（waveBars01[i]，这首歌长什么样）× scale（此刻这一拍多响）。
- *  scale = 0 → 柱子全塌成一条横线（暂停 / 静止时用户要的那条横线）。 */
+/** 第 [from, to) 个取样点 → **一条连续折线**的 d。
+ *
+ *  用户原话「就像心电图那样 一条线」。旧版每根是独立的 `M x,48-h L x,48+h`，
+ *  72 段互不相连的竖线 —— 那不是线，是柱子；安静段半高 0.6px 就成了死横线。
+ *  现在整段只在起点写一次 M，之后全是 L，DOM 里读出来就是一条折线
+ *  （wave-gate 有一条断言专钉「不许出现第二个 M」）。
+ *
+ *  y = 中线 − (轮廓 − 0.5) × 半幅 × 呼吸系数：
+ *    轮廓 0 → 贴底、轮廓 1 → 贴顶，线撑满方框；
+ *    呼吸系数 = WAVE_FLOOR + (1 − WAVE_FLOOR) × scale，下限 0.7，
+ *    所以任何情况下都塌不成一条平线。 */
 function waveBars(from, to, scale) {
   let d = '';
   const hs = waveBars01;
   if (!hs) return d;
+  const br = WAVE_FLOOR + (1 - WAVE_FLOOR) * scale;
   for (let i = from; i < to; i++) {
-    const h = Math.round((WAVE_REST + hs[i] * WAVE_AMP_MAX * scale) * 100) / 100;
-    d += 'M' + WAVE_BAR_X[i] + ',' + (WAVE_MID - h)
-       + 'L' + WAVE_BAR_X[i] + ',' + (WAVE_MID + h);
+    const y = Math.round((WAVE_MID - (hs[i] - 0.5) * WAVE_SWING * br) * 100) / 100;
+    d += (i === from ? 'M' : 'L') + WAVE_BAR_X[i] + ',' + y;
   }
   return d;
 }
@@ -2794,7 +2860,8 @@ function collectWaves() {
       if (!main) continue;
       out.push({ main: main,
                  rest: svgs[i].querySelector('.wave-rest'),
-                 head: svgs[i].querySelector('.wave-head') });
+                 head: svgs[i].querySelector('.wave-head'),
+                 pen: svgs[i].querySelector('.wave-pen') });
     }
   } catch (_) { /* 老内核没有 querySelectorAll：动画是锦上添花，绝不许拖垮页面 */ }
   return out;
@@ -2809,15 +2876,29 @@ function drawWave() {
   if (!wavePaths.length) return;
   if (!waveBars01) return;
   const head = waveHead();
-  const cut = Math.round(head * WAVE_BARS);
+  /* main 与 rest 各画到接缝点为止、rest 从接缝前一点起笔 —— 两条 path 在
+   * 播放头处重叠一个点，读起来仍是**一条**折线，不会在扫描位置断开豁口。 */
+  const cut = Math.max(1, Math.min(WAVE_BARS, Math.round(head * WAVE_BARS)));
   const dm = waveBars(0, cut, waveAmp);
-  const dr = waveBars(cut, WAVE_BARS, waveAmp);
+  const dr = waveBars(Math.max(0, cut - 1), WAVE_BARS, waveAmp);
   const hx = (head * WAVE_W).toFixed(1);
+  /* 笔尖跟着折线走：直接用画它的那条公式算 y，不解析 d —— 解析既慢又要
+   * 跟画法绑死，改一次画法就得改两处。 */
+  let penY = WAVE_MID;
+  if (waveBars01 && cut > 0) {
+    const ci = Math.min(WAVE_BARS - 1, cut - 1);
+    const br = WAVE_FLOOR + (1 - WAVE_FLOOR) * waveAmp;
+    penY = WAVE_MID - (waveBars01[ci] - 0.5) * WAVE_SWING * br;
+  }
   for (let i = 0; i < wavePaths.length; i++) {
     const w = wavePaths[i];
     if (w.main) w.main.setAttribute('d', dm);
     if (w.rest) w.rest.setAttribute('d', dr);
     if (w.head) w.head.setAttribute('x', hx);
+    if (w.pen) {
+      w.pen.setAttribute('cx', hx);
+      w.pen.setAttribute('cy', penY.toFixed(1));
+    }
   }
 }
 
@@ -2838,8 +2919,13 @@ function waveFrame(ts) {
    * **播放位置上的真实响度**，曲子往前走这个值就在变，柱高就跟着变。
    *
    * 没下发曲线（老成片 / 服务器没算出来）→ envAt 返回 -1 → 回落成满响，
-   * 行为不退化成死线；暂停 → 目标 0 → 整排塌回那条横线。
-   * 曲线里写着 0 的那一拍 = 这首歌真安静 = 整排塌下去，
+   * 且 bakeWaveBars 已换成固定山形轮廓，所以既不是死线也不是平线。
+   *
+   * scale 的语义 v1.21.38 起变了：它**不再**是「整排柱子的总缩放」，而是
+   * 摆幅的呼吸系数（0.7~1.0）。旧版 scale=0 会让整排归零 —— 用户看到的
+   * 「中间一条横在中间不好看」就是这么来的。现在无论 playing 真假、
+   * 此刻多安静，线永远保持 70% 以上的起伏，只是呼吸轻一点。
+   * 曲线里写着 0 的那一拍 = 这首歌真安静 = 那一段贴底，
    * 不存在「拿不到曲线就兜满振幅」的二次兜底 —— 那正是 wave-gate 实测抓到的
    * 「越安静越鼓」。 */
   let cur = 1;
