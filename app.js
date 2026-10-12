@@ -2465,7 +2465,7 @@ function currentVersion() {
       if (v) return v;
     }
   } catch (_) { /* 忽略 */ }
-  return '1.21.35'; // 网页版：与 manifest versionName 同步维护
+  return '1.21.36'; // 网页版：与 manifest versionName 同步维护
 }
 
 let updateUrl = '';
@@ -2665,6 +2665,20 @@ wireUpdate();
  * 柱高 = 那一刻的响度；播放头从左扫到右，扫过的点亮、没到的压暗。
  * **静止时柱子全部塌成一条横线**（就是用户要的那条横线）。
  *
+ * —— 那版是**错的**，用户原话「那个音频线越来越丑 都不会动」。根因：
+ *   waveFrame 里 `waveAmpTarget = playing ? 1 : 0` —— 涨到 1 就恒等于 1，
+ *   而柱高是换歌时 bakeWaveBars() 一次性烤死的，于是整首歌期间每帧传的都是
+ *   同一个 d，**唯一在动的是播放头**。SoundCloud 那套是「静态轮廓 + 扫描」，
+ *   不是用户要的「跟着旋律连绵起伏」；手上有 20 点/秒的整首真实曲线，
+ *   却只拿它烤了一张静态图，等于把真数据浪费了。
+ *
+ * v1.21.36 换成 **等化器**（用户在三套可预览动画里点名的那套）：
+ *   柱子的**形状**仍是整首的响度轮廓（换歌时烤一次，bakeWaveBars），
+ *   但**整体高度每帧跟着「此刻这一拍的响度」缩放** ——
+ *   h[i] = 静止半高 + 轮廓[i] × 此刻响度 × 满响半高。
+ *   音乐一响整排涨起来，一安静就塌下去，整首歌一直在呼吸。
+ *   形状（这首歌长什么样）× 现在（这一拍多响）= 既认得出是哪首，又在动。
+ *
  * 真实数据从哪来：服务端在烤片时就把这首的响度曲线算好（server.py 的 env_of，
  * 20 点/秒），随 air 消息的 `env` 字段发下来。
  *
@@ -2724,7 +2738,17 @@ function envAt(t) {
   return v < 0 ? 0 : (v > 1 ? 1 : v);
 }
 
-let waveBars01 = null;     // 每根柱子的响度 [0,1]：换歌时算一次，每帧只做缩放
+/** 现在播到第几秒（[0,1] 的进度比例）。没收到 air 时返回 1。
+ *  抽成一个函数是必须的：播放头（drawWave 用它定 x）和等化器的「此刻响度」
+ *  （waveFrame 用它取 envAt）**必须是同一个值**，两处各算一遍必然对不上。 */
+function waveHead() {
+  if (waveEnvDur <= 0 || waveEnvStart <= 0) return 1;
+  let head = (Date.now() - waveEnvStart) / 1000 / waveEnvDur;
+  if (!(head >= 0)) head = 0; else if (head > 1) head = 1;
+  return head;
+}
+
+let waveBars01 = null;     // 整首的轮廓：每根柱子占多大比重，换歌时算一次
 
 /** 换歌时把整首的响度曲线切成一根根柱子的高度。
  *  老成片 / 服务器没下发曲线：整首当满响画（仍是「有东西在动」，不是死线）。
@@ -2742,7 +2766,8 @@ function bakeWaveBars() {
 }
 
 /** 第 [from, to) 根柱子 → 一条 path 的 d。
- *  scale = 整体缩放，静止时逼近 0 → 柱子全塌成一条横线（用户要的那条横线）。 */
+ *  轮廓（waveBars01[i]，这首歌长什么样）× scale（此刻这一拍多响）。
+ *  scale = 0 → 柱子全塌成一条横线（暂停 / 静止时用户要的那条横线）。 */
 function waveBars(from, to, scale) {
   let d = '';
   const hs = waveBars01;
@@ -2755,8 +2780,8 @@ function waveBars(from, to, scale) {
   return d;
 }
 
-let waveAmp = 0;           // 当前缩放：0 = 柱子塌成一条横线，1 = 按真实响度画满
-let waveAmpTarget = 0;
+let waveAmp = 0;           // 当前缩放 = 此刻这一拍的响度 [0,1]：0 = 塌成横线
+let waveAmpTarget = 0;     // 上面那个值的目标（每帧由 waveFrame 重算，见下）
 let waveLast = 0;
 let wavePaths = null;      // [{main, rest, head}]，算一次缓存起来
 
@@ -2783,11 +2808,7 @@ function drawWave() {
   if (!wavePaths) wavePaths = collectWaves();
   if (!wavePaths.length) return;
   if (!waveBars01) return;
-  let head = 1;
-  if (waveEnvDur > 0 && waveEnvStart > 0) {
-    head = (Date.now() - waveEnvStart) / 1000 / waveEnvDur;
-    if (!(head >= 0)) head = 0; else if (head > 1) head = 1;
-  }
+  const head = waveHead();
   const cut = Math.round(head * WAVE_BARS);
   const dm = waveBars(0, cut, waveAmp);
   const dr = waveBars(cut, WAVE_BARS, waveAmp);
@@ -2808,14 +2829,30 @@ function waveFrame(ts) {
   let playing = false;
   try { playing = !!(document.body && document.body.classList
                      && document.body.classList.contains('playing')); } catch (_) { /* 忽略 */ }
-  /* 柱高是换歌时按位置查好表的（见 bakeWaveBars），这里只管「起没起」：
-   * 播放就把整首按真实响度画满，暂停就塌成一条横线。
-   * 曲线里写着 0 的那一拍 = 这首歌真安静 = 那根柱子本来就短，
+  /* 等化器：柱子的**形状**是整首的轮廓（bakeWaveBars 换歌时烤一次），
+   * 这里每帧算出「此刻这一拍有多响」当整体缩放 —— 整排柱子跟着音乐呼吸。
+   *
+   * v1.21.35 的根因就在这行：原来写的是 `waveAmpTarget = playing ? 1 : 0`，
+   * 涨到 1 之后恒等于 1，而柱高换歌时就烤死了，于是整首歌每帧传同一个 d，
+   * 只有播放头在走（用户原话「越来越丑 都不会动」）。现在取的是
+   * **播放位置上的真实响度**，曲子往前走这个值就在变，柱高就跟着变。
+   *
+   * 没下发曲线（老成片 / 服务器没算出来）→ envAt 返回 -1 → 回落成满响，
+   * 行为不退化成死线；暂停 → 目标 0 → 整排塌回那条横线。
+   * 曲线里写着 0 的那一拍 = 这首歌真安静 = 整排塌下去，
    * 不存在「拿不到曲线就兜满振幅」的二次兜底 —— 那正是 wave-gate 实测抓到的
-   * 「越安静越鼓」。没下发曲线的整首满响，是在 bakeWaveBars 里一次性决定的。 */
-  waveAmpTarget = playing ? 1 : 0;
-  /* 平滑逼近：6/s 的速度贴上去，开播/暂停都不许有跳变 */
-  waveAmp += (waveAmpTarget - waveAmp) * Math.min(1, dt * 6);
+   * 「越安静越鼓」。 */
+  let cur = 1;
+  if (waveEnvDur > 0 && waveEnvStart > 0) {
+    const v = envAt(waveHead() * waveEnvDur);
+    if (v >= 0) cur = v;
+  }
+  waveAmpTarget = playing ? cur : 0;
+  /* 快起慢落（经典 VU 甩表）：涨时 18/s 抢上去，落时 7/s 收回来。
+   * 对称缩放会把重音抹平 —— 柱子弹不起来，整排一起匀速飘，
+   * 看着像呼吸机，不像跟着旋律。 */
+  const rate = waveAmpTarget > waveAmp ? 18 : 7;
+  waveAmp += (waveAmpTarget - waveAmp) * Math.min(1, dt * rate);
   drawWave();
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(waveFrame);
 }
