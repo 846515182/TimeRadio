@@ -2465,7 +2465,7 @@ function currentVersion() {
       if (v) return v;
     }
   } catch (_) { /* 忽略 */ }
-  return '1.21.38'; // 网页版：与 manifest versionName 同步维护
+  return '1.22.0'; // 网页版：与 manifest versionName 同步维护
 }
 
 let updateUrl = '';
@@ -2712,7 +2712,8 @@ for (let wi = 0; wi < WAVE_BARS; wi++) {
 const WAVE_SWING = 88;
 /* scale 只把摆幅在 70%~100% 之间呼吸。下限 0.7 是结构性保险：哪怕 playing
  * 判假、哪怕此刻真安静，线也永远是有起伏的形状，**不会**再塌成一条平线。 */
-const WAVE_FLOOR = 0.7;
+/* v1.22.0 起呼吸系数改为 0.8 + 0.2*scale，不再用固定下限 WAVE_FLOOR。
+ * 柱子高度 = (0.5 + 0.5*轮廓) * WAVE_SWING * (0.8 + 0.2*scale)。 */
 const ENV_HZ = 20;       // 服务端 env 的采样率，两边必须一致
 
 let waveEnv = '';        // 当前这首的响度曲线（一串 ASCII，没曲线就是空串）
@@ -2838,10 +2839,15 @@ function waveBars(from, to, scale) {
   let d = '';
   const hs = waveBars01;
   if (!hs) return d;
-  const br = WAVE_FLOOR + (1 - WAVE_FLOOR) * scale;
+  /* 柱子高度 = (0.5 + 0.5×轮廓) × 最大高度 × 呼吸系数。
+   * 轮廓 0 → 高度 0.5×88×0.8 = 35.2（方框 35%，不塌成线）；
+   * 轮廓 1 → 高度 1.0×88×1.0 = 88（方框 88%，留 4px 边距）。
+   * 中间对称：柱顶 = 中线 − 半高，柱底 = 中线 + 半高。 */
+  const br = 0.8 + 0.2 * scale;
   for (let i = from; i < to; i++) {
-    const y = Math.round((WAVE_MID - (hs[i] - 0.5) * WAVE_SWING * br) * 100) / 100;
-    d += (i === from ? 'M' : 'L') + WAVE_BAR_X[i] + ',' + y;
+    const h = (0.5 + 0.5 * hs[i]) * (WAVE_SWING / 2) * br;
+    d += 'M' + WAVE_BAR_X[i] + ',' + (WAVE_MID - h)
+       + 'L' + WAVE_BAR_X[i] + ',' + (WAVE_MID + h);
   }
   return d;
 }
@@ -2884,11 +2890,13 @@ function drawWave() {
   const hx = (head * WAVE_W).toFixed(1);
   /* 笔尖跟着折线走：直接用画它的那条公式算 y，不解析 d —— 解析既慢又要
    * 跟画法绑死，改一次画法就得改两处。 */
+  /* 笔尖放在柱顶：跟着柱子高度走，响段笔尖高、轻段笔尖低。 */
   let penY = WAVE_MID;
   if (waveBars01 && cut > 0) {
     const ci = Math.min(WAVE_BARS - 1, cut - 1);
-    const br = WAVE_FLOOR + (1 - WAVE_FLOOR) * waveAmp;
-    penY = WAVE_MID - (waveBars01[ci] - 0.5) * WAVE_SWING * br;
+    const br = 0.8 + 0.2 * waveAmp;
+    const h = (0.5 + 0.5 * waveBars01[ci]) * (WAVE_SWING / 2) * br;
+    penY = WAVE_MID - h;
   }
   for (let i = 0; i < wavePaths.length; i++) {
     const w = wavePaths[i];
