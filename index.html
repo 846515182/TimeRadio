@@ -57,17 +57,44 @@
                一条正弦的振幅（数据真、形状假，这才是「看着假」的根子）。
                三根 path 各司其职：wave-rest = 还没播到（压暗）、
                wave-main = 播过的（点亮）、wave-head = 播放头。
+               拉到频谱侧车（成片url+.spec）后 x 轴换成频段：main = 48 根
+               底锚真频谱柱（无镜像）、rest = 峰值保持白点、播放头按 .wave.eq
+               藏起（进度交给下面的进度条）；没拉到侧车就走老路。
                柱子靠 stroke-linecap:round 出圆头，一条 path 装下全部柱子，
                每帧只改一次 d —— 不用 canvas roundRect（Chrome 99+，这台跑不了），
                全程也不碰 AudioContext（接上会被 WebView 掐掉声音且回不去）。 -->
           <div class="wave" id="coverWave" aria-hidden="true">
             <svg class="wave-svg" viewBox="0 0 320 96" preserveAspectRatio="none">
               <defs>
+                <!-- 频段彩虹：色相沿 x 从 240°（低频蓝）扫到 -60°（高频紫），
+                     中经 青180/绿120/黄60/红0 —— 25 段 stop，hsv(0.88,1.0)
+                     按 tools/wave_eq3.py 的 band_hue 同一公式算出来的。 -->
                 <linearGradient id="wGradHero" x1="0" y1="0" x2="1" y2="0">
-                  <stop offset="0%" stop-color="#8b5cf6" />
-                  <stop offset="36%" stop-color="#22d3ee" />
-                  <stop offset="72%" stop-color="#f472b6" />
-                  <stop offset="100%" stop-color="#fbbf24" />
+                  <stop offset="0%" stop-color="#1f1fff" />
+                  <stop offset="4.167%" stop-color="#1f4dff" />
+                  <stop offset="8.333%" stop-color="#1f7cff" />
+                  <stop offset="12.5%" stop-color="#1fabff" />
+                  <stop offset="16.67%" stop-color="#1fdaff" />
+                  <stop offset="20.83%" stop-color="#1ffff6" />
+                  <stop offset="25%" stop-color="#1fffc7" />
+                  <stop offset="29.17%" stop-color="#1fff98" />
+                  <stop offset="33.33%" stop-color="#1fff69" />
+                  <stop offset="37.5%" stop-color="#1fff3b" />
+                  <stop offset="41.67%" stop-color="#31ff1f" />
+                  <stop offset="45.83%" stop-color="#60ff1f" />
+                  <stop offset="50%" stop-color="#8fff1f" />
+                  <stop offset="54.17%" stop-color="#beff1f" />
+                  <stop offset="58.33%" stop-color="#ecff1f" />
+                  <stop offset="62.5%" stop-color="#ffe31f" />
+                  <stop offset="66.67%" stop-color="#ffb41f" />
+                  <stop offset="70.83%" stop-color="#ff851f" />
+                  <stop offset="75%" stop-color="#ff571f" />
+                  <stop offset="79.17%" stop-color="#ff281f" />
+                  <stop offset="83.33%" stop-color="#ff1f44" />
+                  <stop offset="87.5%" stop-color="#ff1f73" />
+                  <stop offset="91.67%" stop-color="#ff1fa1" />
+                  <stop offset="95.83%" stop-color="#ff1fd0" />
+                  <stop offset="100%" stop-color="#ff1fff" />
                 </linearGradient>
               </defs>
               <line class="wave-base" x1="0" y1="48" x2="320" y2="48" />

@@ -2266,7 +2266,8 @@ body.track-change #cover {
   overflow: visible;
 }
 
-/* 柱波两层共用画法。stroke 走渐变（紫→青→粉→金）—— 沿 x 方向铺开，
+/* 柱波两层共用画法。stroke 走渐变（频段彩虹：低频蓝→青→绿→黄→红→高频紫）——
+   沿 x 方向铺开，
    整排柱子从左到右换色，顺手把原来 --cover-hue「随歌变色」那股劲儿接了过来。
    柱头不靠 border-radius（那是给盒模型的），靠 stroke-linecap:round ——
    一条 path 就能装下全部柱子，每帧只改一次 d，老 WebView 也跟得上。 */
@@ -2599,6 +2600,14 @@ body.track-change #cover {
 
 .wave .wave-rest { stroke-width: 2.3; opacity: .26; }
 .wave .wave-head { fill: #ffffff; opacity: .92; }
+
+/* —— ⑥ 真频谱 EQ 模式：app.js 拉到频谱侧车（.spec）就给 .wave 挂 .eq ——
+   x 轴从「时间」换成「频段」：播放头扫过频段没有意义，藏起来（进度由下面的
+   进度条承担）；暗层改职为 wave-eq3 那份动图里的**峰值保持白点**（刷白提亮），
+   零位虚线由 app.js 挪到柱底 y=92。没拉到侧车就走老路，.eq 不会出现。 */
+.wave.eq .wave-rest { stroke: #ffffff; stroke-width: 2; opacity: .92; }
+.wave.eq .wave-head,
+.wave.eq .wave-pen { opacity: 0; }
 
 /* —— ⑤ 排队字幕轨：紧跟波浪下沿，通栏宽 ——
    id 没变（queueRail / railTick / railTickTrack / queueRailEmpty），

@@ -2465,7 +2465,7 @@ function currentVersion() {
       if (v) return v;
     }
   } catch (_) { /* 忽略 */ }
-  return '1.22.0'; // 网页版：与 manifest versionName 同步维护
+  return '1.23.0'; // 网页版：与 manifest versionName 同步维护
 }
 
 let updateUrl = '';
@@ -2720,6 +2720,22 @@ let waveEnv = '';        // 当前这首的响度曲线（一串 ASCII，没曲�
 let waveEnvDur = 0;      // 这首的时长（秒）：越界就不取了
 let waveEnvStart = 0;    // 开播时刻（ms），跟 airProgress 同源
 
+/* —— 频谱侧车（.spec）→ 48 频段 EQ 的状态。**必须声明在 setWaveEnv 与
+   startWave 的启动路径之前**：函数声明会提升，let/const 不会，晚一步就是 TDZ。 */
+const SPEC_RETRY_S = [2, 5, 10, 20, 40, 70, 100, 150];  // 第 2~9 次重试间隔（秒）
+const EQ_BASE = 92;       // 柱底锚 y（viewBox 96 高，上下各留 4 边距）
+const EQ_MIN_H = 3;       // 柱子保底高度：再安静也留一点，不塌成平线
+const EQ_ATK_TAU = 0.031; // 起振时间常数（wave_eq3：30ms 步进 attack 0.62 → tau=31ms）
+
+let waveSpec = null;   // 解析好的侧车 {hz, nb, npts, s, xs, decTau}
+let waveSpecUrl = '';  // 当前认领的侧车地址（'' = 没在拉）
+let waveSpecTries = 0; // 已发起的拉取次数（含首次）
+let waveSpecTimer = 0; // 重试定时器句柄
+let waveEQ = false;    // 真频谱接管中（false = env 轮廓老路）
+let eqSm = null;       // 逐频段平滑值 [0,1]（弹道见 eqStep）
+let eqPk = null;       // 逐频段峰值保持 [0,1]
+
+
 /* 本曲自己的响度区间（10% / 90% 分位），换歌时算一次。
  * 不同母带的响度能差 20dB —— 轻爵士那首按满量程线性映射，中段 50% 的点
  * 会全挤在中线附近一条窄带里，画出来又是一条用户骂过的「中间的死线」。
@@ -2753,6 +2769,9 @@ function setWaveEnv(body) {
   waveEnvStart = s > 0 ? s : 0;
   bakeEnvRange();    // 先定这首的响度区间（归一化的尺子）
   bakeWaveBars();    // 再按位置切轮廓；每帧只做缩放，不再逐帧查表
+  /* 频谱侧车按 url 派生（`<成片url>.spec`）：拉得到就切 48 频段真 EQ，
+   * 拉不到就一直走上面这条 env 轮廓老路 —— 行为不回退，两套渲染互不打架。 */
+  loadWaveSpec((body && body.url) ? String(body.url) : '');
 }
 
 /** 把原始响度格（0~93）按本曲区间映到 [0,1]，越界夹住。 */
@@ -2867,7 +2886,8 @@ function collectWaves() {
       out.push({ main: main,
                  rest: svgs[i].querySelector('.wave-rest'),
                  head: svgs[i].querySelector('.wave-head'),
-                 pen: svgs[i].querySelector('.wave-pen') });
+                 pen: svgs[i].querySelector('.wave-pen'),
+                 base: svgs[i].querySelector('.wave-base') });
     }
   } catch (_) { /* 老内核没有 querySelectorAll：动画是锦上添花，绝不许拖垮页面 */ }
   return out;
@@ -2880,6 +2900,7 @@ function collectWaves() {
 function drawWave() {
   if (!wavePaths) wavePaths = collectWaves();
   if (!wavePaths.length) return;
+  if (waveEQ && waveSpec) { drawWaveEQ(); return; }   // 真频谱在：48 柱底锚 EQ
   if (!waveBars01) return;
   const head = waveHead();
   /* main 与 rest 各画到接缝点为止、rest 从接缝前一点起笔 —— 两条 path 在
@@ -2947,6 +2968,7 @@ function waveFrame(ts) {
    * 看着像呼吸机，不像跟着旋律。 */
   const rate = waveAmpTarget > waveAmp ? 18 : 7;
   waveAmp += (waveAmpTarget - waveAmp) * Math.min(1, dt * rate);
+  eqStep(dt, playing);   // EQ 模式才有活：逐频段弹道 + 峰值保持（内部自查）
   drawWave();
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(waveFrame);
 }
@@ -2962,6 +2984,194 @@ function startWave() {
   requestAnimationFrame(waveFrame);
 }
 startWave();
+
+/* ============ 频谱侧车（.spec）→ 48 频段真 EQ（wave-eq3.gif 定案那套） ============
+ * 前面那条 env 轮廓给的是「整首每一点有多响」—— 柱子按**时间位置**查这一条曲线，
+ * 一根柱子一帧只有一个数可查，72 根只能同起同落（用户骂过的根子）。
+ * 真 EQ 要的是「此刻 48 个频段各有多响」：这份数据服务端烤（server.py spec_bake：
+ * ffmpeg 一次解码 + 48 路带通逐段量 RMS），落成片旁边的 `<成片url>.spec` 侧车静态
+ * 直出，客户端按 url 派生地址直接 fetch —— 不碰 AudioContext、不动白名单。
+ *
+ * 侧车是 gzip 文本（服务端 2xx 补 Content-Encoding，浏览器透明解压，老内核零风险）：
+ *     S1 <hz> <nb> <npts>\n
+ *     随后 npts×nb 个字符，**帧在前、频段在后**，每字符 chr(33+level) 0~93，
+ *     逐频段已按各自 10%/90% 分位归一（音乐能量随频率 -6dB/八度衰减，
+ *     共用一把尺子的话高频只剩矮桩、右半边等于死的 —— wave-eq3 实测定的口径）。
+ *
+ * 拉谱失败一律回落 env 轮廓，渐进重试 9 次、累计 397 秒窗口（服务端烤一首
+ * 约 75 秒，还要罩住「下一首」在炉子前面排队的前一炉）—— 任何情况下画面都不
+ * 比现在差，这是这条链的底线。
+ *
+ * 渲染三件事（参数照 tools/wave_eq3.py 移植，用户认可的就是那份动图）：
+ *   ① x = 频段不是时间：48 根柱子底锚 y=92 铺满方框，**无镜像倒影**；
+ *   ② 逐频段弹道：起振快（tau 31ms）、衰减低频慢高频快（0.285s → 0.084s），
+ *      真频谱仪的能量驻留规律 —— 低音有余韵、高音一跳一收；
+ *   ③ 峰值保持白点（wave-rest 层，.wave.eq 下刷白）：离开的音量留个记号。
+ * 播放头在频段轴上没有意义 → .wave.eq 下隐藏，进度由下面的进度条承担。 */
+
+/** air 换歌的入口：认领新侧车。同地址不重置（air 重发不许把已拉到的谱扔掉），
+ *  换地址先废谱回 env 轮廓，再按需拉新的。 */
+function loadWaveSpec(u) {
+  const want = u ? (u + '.spec') : '';
+  if (want === waveSpecUrl) {
+    if (want && !waveSpec && !waveSpecTimer
+        && waveSpecTries <= SPEC_RETRY_S.length) fetchWaveSpec();
+    return;
+  }
+  if (waveSpecTimer) { try { clearTimeout(waveSpecTimer); } catch (_) { /* 忽略 */ } }
+  waveSpecTimer = 0;
+  waveSpecUrl = want;
+  waveSpec = null;
+  eqSm = null;
+  eqPk = null;
+  waveSpecTries = 0;
+  if (waveEQ) { waveEQ = false; eqMode(false); }   // 回 env 轮廓：零位线挪回中线
+  if (!want) return;
+  fetchWaveSpec();
+}
+
+function fetchWaveSpec() {
+  const url = waveSpecUrl;
+  if (!url) return;
+  waveSpecTries++;
+  let p = null;
+  try { p = (typeof fetch === 'function') ? fetch(url) : null; } catch (_) { p = null; }
+  if (!p || typeof p.then !== 'function') { specRetryLater(); return; }
+  p.then(function (r) {
+    if (!r || !r.ok) throw new Error('spec http');   // 404 = 服务端还在后台烤
+    return r.text();
+  }).then(function (t) {
+    if (waveSpecUrl !== url) return;                 // 中途换歌：这份作废
+    if (!setWaveSpec(t)) specRetryLater();
+  }).catch(function () {
+    if (waveSpecUrl !== url) return;
+    specRetryLater();
+  });
+}
+
+function specRetryLater() {
+  if (waveSpecTimer) return;
+  const i = waveSpecTries - 1;                       // 第 n 次失败用第 n-1 个间隔
+  if (i < 0 || i >= SPEC_RETRY_S.length) return;     // 额度用完：这轮就走 env 轮廓
+  if (typeof setTimeout !== 'function') return;
+  waveSpecTimer = setTimeout(function () {
+    waveSpecTimer = 0;
+    fetchWaveSpec();
+  }, SPEC_RETRY_S[i] * 1000);
+}
+
+/** 侧车文本 → 可用状态。解析不了返回 false（回落 env 轮廓，行为不回退）。 */
+function setWaveSpec(txt) {
+  try {
+    if (typeof txt !== 'string' || txt.length < 80) return false;
+    const nl = txt.indexOf('\n');
+    if (nl < 4) return false;
+    const h = txt.slice(0, nl).split(' ');
+    if (h[0] !== 'S1') return false;
+    const hz = Number(h[1]), nb = Number(h[2]), npts = Number(h[3]);
+    if (!(hz > 0) || !(nb >= 8 && nb <= 96) || !(npts >= 4)) return false;
+    const s = txt.slice(nl + 1);
+    if (s.length < npts * nb) return false;
+    const xs = [], decTau = [];
+    for (let b = 0; b < nb; b++) {
+      xs.push((((b + 0.5) / nb) * WAVE_W).toFixed(1));
+      /* 衰减时间常数（wave_eq3：30ms 步进 dec = 0.30 - 0.20*(1-u)，高频 0.30
+       * → 低频 0.10）→ tau = -0.03/ln(1-dec)：低频 0.285s、高频 0.084s。 */
+      const u = nb > 1 ? b / (nb - 1) : 0;
+      decTau.push(-0.03 / Math.log(1 - (0.30 - 0.20 * (1 - u))));
+    }
+    waveSpec = { hz: hz, nb: nb, npts: npts, s: s, xs: xs, decTau: decTau };
+    eqSm = new Array(nb);
+    eqPk = new Array(nb);
+    for (let b = 0; b < nb; b++) { eqSm[b] = 0; eqPk[b] = 0; }
+    waveEQ = true;
+    eqMode(true);
+    return true;
+  } catch (_) { return false; }
+}
+
+/** 进/出 EQ 模式的 DOM 开关：零位虚线挪到柱底、峰值层刷白（.eq 由 CSS 接管）、
+ *  播放头藏起（CSS .wave.eq 下 opacity 0）。 */
+function eqMode(on) {
+  try {
+    const wraps = document.querySelectorAll('.wave');
+    for (let i = 0; i < wraps.length; i++) {
+      if (on) wraps[i].classList.add('eq');
+      else wraps[i].classList.remove('eq');
+    }
+  } catch (_) { /* 老内核没有 classList 也绝不拖垮渲染 */ }
+  if (!wavePaths) wavePaths = collectWaves();
+  const y = on ? EQ_BASE : WAVE_MID;
+  for (let i = 0; i < wavePaths.length; i++) {
+    const w = wavePaths[i];
+    if (w.base) { w.base.setAttribute('y1', y); w.base.setAttribute('y2', y); }
+  }
+}
+
+/** 每帧一次：此刻的真实频谱 → 逐频段平滑值 + 峰值保持。 */
+function eqStep(dt, playing) {
+  if (!waveEQ || !waveSpec || !eqSm) return;
+  /* dt 是外部喂进来的时间戳之差：时间戳回拨 / 人工驱动（探针、门禁的
+   * drive(n) 往未来拨了 1.4 秒再交还给 rAF）会给出负值 —— 1-exp(-dt/tau)
+   * 一旦变成巨大的负数，柱高当场算飞到 viewBox 外面（2026-10-14 截图实测：
+   * 整排柱子消失、只剩峰值白点）。夹成 [0, 0.1]，平滑系数就恒在 [0,1)。 */
+  if (!(dt > 0)) dt = 0;
+  else if (dt > 0.1) dt = 0.1;
+  const s = waveSpec.s, nb = waveSpec.nb, npts = waveSpec.npts;
+  const t = (waveEnvDur > 0) ? (waveHead() * waveEnvDur) : 0;
+  const p = t * waveSpec.hz;
+  let k0 = Math.floor(p);
+  let frac = p - k0;
+  if (!(k0 >= 0)) { k0 = 0; frac = 0; }
+  if (k0 >= npts) { k0 = npts - 1; frac = 0; }   // 片尾夹住，不越界
+  const k1 = (k0 + 1 < npts) ? (k0 + 1) : k0;
+  const ka = 1 - Math.exp(-dt / EQ_ATK_TAU);
+  const o0 = k0 * nb, o1 = k1 * nb;
+  for (let b = 0; b < nb; b++) {
+    let a = s.charCodeAt(o0 + b) - 33;
+    if (a < 0) a = 0; else if (a > 93) a = 93;
+    let c = s.charCodeAt(o1 + b) - 33;
+    if (c < 0) c = 0; else if (c > 93) c = 93;
+    /* 没在播 = 这一频段此刻没有能量：柱子按慢衰落收进怠速，不冻结也不消失 */
+    const v = playing ? ((a + (c - a) * frac) / 93) : 0;
+    const u = nb > 1 ? b / (nb - 1) : 0;
+    const sm = eqSm[b];
+    const kd = 1 - Math.exp(-dt / waveSpec.decTau[b]);
+    eqSm[b] = sm + (v - sm) * ((v > sm) ? ka : kd);
+    let pk = eqPk[b];
+    if (v > pk) pk = v;
+    else { pk -= (0.2 + 0.4 * u) * dt; if (pk < 0) pk = 0; }   // 每秒回落 0.2~0.6
+    eqPk[b] = pk;
+  }
+}
+
+/** EQ 画法：48 根底锚柱（无镜像）进 main，峰值白点进 rest。 */
+function drawWaveEQ() {
+  const nb = waveSpec.nb;
+  let dm = '', dr = '';
+  for (let b = 0; b < nb; b++) {
+    const x = waveSpec.xs[b];
+    /* !(h >= 下限) 同时拦负数和 NaN —— 任何算飞的值都不许画出 viewBox：
+     * 柱子宁可短到保底，也绝不整根消失。 */
+    let h = (0.05 + 0.95 * eqSm[b]) * WAVE_SWING;   // 0.05 垫底：怠速也看得见
+    if (!(h >= EQ_MIN_H)) h = EQ_MIN_H;
+    else if (h > WAVE_SWING) h = WAVE_SWING;
+    dm += 'M' + x + ',' + (EQ_BASE - h).toFixed(1) + 'L' + x + ',' + EQ_BASE;
+    let ph = (0.05 + 0.95 * eqPk[b]) * WAVE_SWING;
+    if (!(ph >= EQ_MIN_H)) ph = EQ_MIN_H;
+    else if (ph > WAVE_SWING) ph = WAVE_SWING;
+    const py = Math.max(2, EQ_BASE - ph - 3);
+    dr += 'M' + x + ',' + py.toFixed(1) + 'l0.6,0';  // round cap：一画就是白点
+  }
+  const hx = (waveHead() * WAVE_W).toFixed(1);
+  for (let i = 0; i < wavePaths.length; i++) {
+    const w = wavePaths[i];
+    if (w.main) w.main.setAttribute('d', dm);
+    if (w.rest) w.rest.setAttribute('d', dr);
+    if (w.head) w.head.setAttribute('x', hx);
+    if (w.pen) { w.pen.setAttribute('cx', hx); w.pen.setAttribute('cy', EQ_BASE); }
+  }
+}
 
 /* ---------------- 徽章渲染 + 实时在线人数（官方数据优先，MQTT 感知兜底） ----------------
  * 数据源一（优先）：蜻蜓FM 官方 channels 接口的 audience_count，见上方
