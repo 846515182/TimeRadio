@@ -30,6 +30,12 @@
         <span class="brand-logo">时光电台</span>
       </div>
       <p class="slogan">拾起耳朵里的好时光 · MUSIC RADIO</p>
+      <!-- v1.24：在线人数（用户原话「APP界面设一个在线人数 默认235 真实的在线
+           就继续往上加」）。默认 235；presence 感知到真实在线听友就在此之上
+           实时累加（235 + n），线路不可用也保持 235 —— 绝不显示 0/空。 -->
+      <div class="online-pill" id="hdrOnline" title="在线听友（默认235，真实在线往上加）">
+        <span class="online-dot" aria-hidden="true"></span><span id="hdrOnlineN">235</span> 人在线
+      </div>
     </header>
 
     <section class="player" aria-label="播放器">
@@ -225,6 +231,16 @@
                    maxlength="30" enterkeyhint="search" />
           </div>
           <button class="primary req-go" id="reqGo" type="submit">点歌</button>
+        </div>
+        <!-- v1.24：搜索平台（QQ音乐默认，其余备选）。选中哪家这一单先搜哪家；
+             输入框敲 /netease 歌名 这类指令也能逐单覆盖（用户原话「这是格式」）。
+             云端按「选中→其余平台→YouTube」的序模拟人工点歌，四平台全空才报
+             没找到 —— 点歌永远不会整队卡死。 -->
+        <div class="req-src" id="reqSrc">
+          <button type="button" class="src-chip on" data-src="qq">QQ音乐</button>
+          <button type="button" class="src-chip" data-src="netease">网易云</button>
+          <button type="button" class="src-chip" data-src="kugou">酷狗</button>
+          <button type="button" class="src-chip" data-src="kuwo">酷我</button>
         </div>
         <!-- v1.21.30 整块删除（用户原话「点歌搜索下面那个框有啥用 里面显示歌曲
              感觉没啥用 删掉相关代码」，并确认「两个都删」）：

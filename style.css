@@ -2628,3 +2628,26 @@ body.track-change #cover {
 .stage-tick .rail-tick .q-t { font-size: 13px; max-width: 9em; }
 .stage-tick .rail-tick .q-who { font-size: 10.5px; }
 .stage-tick .queue-rail-empty { font-size: 10.5px; }
+
+/* ---------------- v1.24：搜索平台 chips + 顶栏在线人数 ---------------- */
+.req-src { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.req-src .src-chip {
+  flex: 1 1 0; min-width: 64px; padding: 7px 0; border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.05);
+  color: #b9b4d8; font-size: 12.5px; text-align: center; cursor: pointer;
+  transition: border-color .2s var(--ease), background .2s var(--ease), color .2s var(--ease);
+}
+.req-src .src-chip.on {
+  border-color: rgba(124,136,255,.65); background: rgba(124,136,255,.16);
+  color: #fff;
+}
+.online-pill {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 6px;
+  padding: 3px 10px; border-radius: 999px; font-size: 12px;
+  color: #9ff5cf; background: rgba(34,197,120,.16);
+  border: 1px solid rgba(34,197,120,.28);
+}
+.online-pill .online-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: #34d399;
+  box-shadow: 0 0 6px rgba(52,211,153,.9);
+}

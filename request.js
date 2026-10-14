@@ -148,7 +148,11 @@
       const it = items.get(candFor);
       if (!it || !it.cands || !it.cands.length || it.del) { closeCandModal(); return; }
       if (candTitleEl) {
-        candTitleEl.textContent = '🎵 给《' + String(it.title || '').slice(0, 14) + '》挑版本';
+        /* v1.24：候选来自哪家平台写在标题里（QQ音乐默认主搜）—— 用户看得见
+           这批候选是从哪搜出来的；老进度没带 src 时保持原文案。 */
+        const _cs = it.candSrc && SRC_NAME[it.candSrc]
+          ? (SRC_NAME[it.candSrc] + ' · ') : '';
+        candTitleEl.textContent = '🎵 ' + _cs + '给《' + String(it.title || '').slice(0, 14) + '》挑版本';
       }
       const cur = String(picking[it.id] || it.pick || '');
       if (candHint) {
@@ -386,6 +390,9 @@
           // v1.21.27：歌手跟着快照走 —— 不进 schema 的话对端存的 pick 歌手
           // （it.artist）在合并时被整条重建冲掉，跨设备又变回不显示。
           artist: typeof it.artist === 'string' ? it.artist.slice(0, 40) : '',
+          // v1.24：平台搜索序的排头（qq 默认）。不进 schema 的话对端重建条目
+          // 时会把它冲掉，跨设备就退回默认 QQ音乐。
+          src: ['qq', 'netease', 'kugou', 'kuwo'].indexOf(it.src) >= 0 ? it.src : '',
           mine: !!(cur && cur.mine),   // 回声替换不丢「我点过的」（v1.21.25）
         };
         items.set(id, next);
@@ -396,9 +403,52 @@
       return changed;
     }
 
+    /* ---------------- 搜索平台（v1.24）：QQ音乐默认，其余备选 ----------------
+       用户原话「QQ音乐设为默认搜索 其他备选 把这个加入app 模拟人工点歌」。
+       四颗 chip 选中哪家，这一单就先搜哪家（云端按「选中→其余平台→YouTube」
+       的序模拟人工点歌）；输入框里敲 /netease 歌名 这类指令也能逐单覆盖。 */
+    const SRC_KEYS = ['qq', 'netease', 'kugou', 'kuwo'];
+    let reqSrc = 'qq';
+    try {
+      const sv = localStorage.getItem('fm891.src');
+      if (SRC_KEYS.indexOf(sv) >= 0) reqSrc = sv;
+    } catch (_) { /* 隐私模式：不持久化也照常默认 qq */ }
+    function setSrcChip(sc) {
+      if (SRC_KEYS.indexOf(sc) >= 0) reqSrc = sc;
+      const box = document.getElementById('reqSrc');
+      if (!box) return;
+      const bs = box.querySelectorAll('.src-chip');
+      for (let i = 0; i < bs.length; i++) {
+        bs[i].classList.toggle('on', String(bs[i].getAttribute('data-src')) === reqSrc);
+      }
+    }
+    try {
+      const _srcBox = document.getElementById('reqSrc');
+      if (_srcBox) {
+        _srcBox.addEventListener('click', (e) => {
+          const b = e.target && e.target.closest ? e.target.closest('.src-chip') : null;
+          if (!b) return;
+          const sc = String(b.getAttribute('data-src') || '');
+          if (SRC_KEYS.indexOf(sc) < 0) return;
+          setSrcChip(sc);
+          try { localStorage.setItem('fm891.src', sc); } catch (_) { /* 忽略 */ }
+        });
+        setSrcChip(reqSrc);   // 记忆过的平台恢复高亮（默认 qq）
+      }
+    } catch (_) { /* 忽略 */ }
+
     /* ---------------- 点歌 ---------------- */
     function addRequest(title) {
-      const t = String(title || '').trim().slice(0, 30);
+      let t = String(title || '').trim().slice(0, 30);
+      /* v1.24：/qq /netease /kugou /kuwo 指令前缀（用户原话「这是格式」）——
+         前缀摘出来当这一单的搜索平台，标题保持干净（播报/列表不带 /qq）。 */
+      const _sm = /^\/(qq|netease|kugou|kuwo)\s+(.+)$/i.exec(t);
+      let src = reqSrc;
+      if (_sm) {
+        src = _sm[1].toLowerCase();
+        t = _sm[2].trim().slice(0, 30);
+        setSrcChip(src);          // 跟着输入框的指令切高亮，看得见这一单搜哪家
+      }
       if (!t) { R.toast('先输入歌名'); return false; }
       const now = Date.now();
       if (now - lastAddAt < MIN_GAP) { R.toast('点太快啦，缓一缓～'); return false; }
@@ -440,6 +490,7 @@
         to: '',
         msg: '',
         title: t,
+        src: src,        // v1.24：这一单先搜哪家（qq 默认；chip/指令前缀决定）
         ts: now,
         ver: 1,
         st: 'searching',
@@ -496,6 +547,7 @@
       const stage = stages.indexOf(msg.stage) >= 0 ? msg.stage : 'search';
       const rec = {
         stage: stage,
+        src: typeof msg.src === 'string' ? msg.src.slice(0, 8) : '',
         done: Math.max(0, Number(msg.done) || 0),
         total: Math.max(0, Number(msg.total) || 0),
         eta: Math.max(0, Number(msg.eta) || 0),
@@ -521,6 +573,7 @@
       if (rec.cands && rec.cands.length > 1) {
         const ci = items.get(id);
         if (ci) {
+          if (rec.src) ci.candSrc = rec.src;   // v1.24：候选来自哪家平台（弹窗标题用）
           const sig = rec.cands.map((c) => c.n + ':' + c.t).join('|');
           if (String(ci.candsSig || '') !== sig) {
             ci.cands = rec.cands;
@@ -659,8 +712,14 @@
       return 0;   // 刚提交，还没亮到「全网找歌」
     }
 
-    function progLabel(p) {
-      if (p.stage === 'cands') return { text: '选一个版本 ↓', cls: 'st-search' };
+      /* 平台名（v1.24）：服务端每轮搜索会带 src（qq/netease/...），列表行显示
+         「QQ音乐找歌中…」，用户看得见搜的是哪家（用户原话「搜索显示出来」）。 */
+      const SRC_NAME = { qq: 'QQ音乐', netease: '网易云', kugou: '酷狗', kuwo: '酷我' };
+      function progLabel(p) {
+      if (p.stage === 'cands') {
+        return { text: p.src && SRC_NAME[p.src]
+          ? (SRC_NAME[p.src] + ' · 选一个版本 ↓') : '选一个版本 ↓', cls: 'st-search' };
+      }
       if (p.stage === 'pickwait') {
         return { text: '等你确认版本 · 没替你选', cls: 'st-wait' };
       }
@@ -668,7 +727,10 @@
       if (p.stage === 'swapfail') return { text: '换版失败 · 保留原版', cls: 'st-miss' };
       if (p.stage === 'merge') return { text: '云端合成播报中…', cls: 'st-search' };
       if (p.stage === 'transcode') return { text: '转码中… 马上就好', cls: 'st-search' };
-      if (p.stage !== 'download' || !p.total) return { text: '全网找歌中…', cls: 'st-search' };
+      if (p.stage !== 'download' || !p.total) {
+        return { text: p.src && SRC_NAME[p.src]
+          ? (SRC_NAME[p.src] + '找歌中…') : '全网找歌中…', cls: 'st-search' };
+      }
       const mb = 1048576;
       const done = Math.min(Math.round(p.done / mb), Math.round(p.total / mb));
       let t = '下载中 ' + done + '/' + Math.round(p.total / mb) + ' MB';

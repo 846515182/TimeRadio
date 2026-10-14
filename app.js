@@ -2465,7 +2465,7 @@ function currentVersion() {
       if (v) return v;
     }
   } catch (_) { /* 忽略 */ }
-  return '1.23.0'; // 网页版：与 manifest versionName 同步维护
+  return '1.24.0'; // 网页版：与 manifest versionName 同步维护
 }
 
 let updateUrl = '';
@@ -3413,6 +3413,25 @@ function drawWaveEQ() {
       if (!document.hidden) publishPresence();
     });
   } catch (_) { /* 可选功能，失败静默 */ }
+})();
+
+/* ---------------- 顶栏在线人数（v1.24） ----------------
+ * 用户原话「APP界面设一个在线人数 默认235 真实的在线就继续往上加」：
+ * 默认显示 235；presence 感知到真实在线听友就在此之上实时累加（235 + n）。
+ * 没连上 presence（线路不可用/还在握手）就保持 235 —— 徽章绝不显示 0/空。 */
+(function hdrOnline() {
+  const BASE = 235;
+  function paint() {
+    try {
+      const el = $('hdrOnlineN');
+      if (!el) return;
+      let n = 0;
+      try { n = (window.__fmPresence && Number(window.__fmPresence())) || 0; } catch (_) { n = 0; }
+      el.textContent = String(BASE + (n > 0 ? n : 0));
+    } catch (_) { /* 忽略：徽章渲染不许打断播放器 */ }
+  }
+  setInterval(paint, 30000);
+  paint();
 })();
 
 /* ---------------- 对外接口：在线点歌模块（request.js） ----------------
