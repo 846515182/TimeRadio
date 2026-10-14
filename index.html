@@ -30,11 +30,11 @@
         <span class="brand-logo">时光电台</span>
       </div>
       <p class="slogan">拾起耳朵里的好时光 · MUSIC RADIO</p>
-      <!-- v1.24：在线人数（用户原话「APP界面设一个在线人数 默认235 真实的在线
-           就继续往上加」）。默认 235；presence 感知到真实在线听友就在此之上
+      <!-- v1.25：徽章就一行「在线 N」（用户原话「就写个在线 然后数量不好吗
+           一行就好了」）。默认 235；presence 感知到真实在线听友就在此之上
            实时累加（235 + n），线路不可用也保持 235 —— 绝不显示 0/空。 -->
-      <div class="online-pill" id="hdrOnline" title="在线听友（默认235，真实在线往上加）">
-        <span class="online-dot" aria-hidden="true"></span><span id="hdrOnlineN">235</span> 人在线
+      <div class="online-pill" id="hdrOnline" title="在线人数（默认235，真实在线往上加）">
+        <span class="online-dot" aria-hidden="true"></span><span>在线 <span id="hdrOnlineN">235</span></span>
       </div>
     </header>
 
@@ -103,7 +103,7 @@
                   <stop offset="100%" stop-color="#ff1fff" />
                 </linearGradient>
               </defs>
-              <line class="wave-base" x1="0" y1="48" x2="320" y2="48" />
+              <line class="wave-base" x1="0" y1="92" x2="320" y2="92" />
               <path class="wave-rest" />
               <path class="wave-main" />
               <rect class="wave-head" x="320" y="12" width="1.8" height="72" />
@@ -199,25 +199,22 @@
       <!-- 标题行：右边常驻一个 ✕。以前退出只能靠底部那个「收起」，而弹窗没有
            max-height 也不滚动，点几首歌后队列把弹窗撑出屏幕，那个按钮被顶到
            屏幕外 —— 用户反馈「点完后返回按钮都没有」，等于被困在点歌台里。 -->
-      <!-- v1.21.12 头部重排（用户：「点歌那个页面很烂」）。旧版不是缺功能，是**顺序
-           反了**：上半屏全是输入区（输入框 + 常听 + 主播性格 + 一整行「点歌」大按钮
-           + 折叠区），真正想看的「大家排到哪了、我第几位」被压在屏幕下面，点完歌还得
-           滑下去找。现在头一行交代身份与协同（几个人一起点歌 + 昵称入口），第二行就是
-           「输入 + 点歌」（主按钮与输入同排，省掉一整行），其余收进「更多」。 -->
+      <!-- v1.21.12 头部重排：头一行交代「我是谁」，第二行「输入 + 点歌」同排。
+           v1.25：「N 人一起点歌」协同读数整块删除（用户：这几个字没啥用，
+           删除相关代码）—— 头部只剩标题；名字按钮直接显示当前名字（点开可改）。 -->
       <div class="dialog-head req-head">
         <div class="req-head-l">
           <h3 id="reqTitle">🎧 点歌台</h3>
-          <span class="req-live" id="reqLive">正在数人…</span>
         </div>
         <div class="req-head-r">
-          <button class="nick-btn" id="nickBtn" type="button">昵称</button>
+          <button class="nick-btn" id="nickBtn" type="button" title="改名字">名字</button>
           <button class="dialog-x" id="reqX" type="button" aria-label="收起点歌台">✕</button>
         </div>
       </div>
-      <!-- 昵称编辑：默认收起（点头部「昵称」才展开）。以前它躺在队列底下，改一次昵称
-           要滑过整张列表。 -->
+      <!-- v1.21.12：昵称编辑默认收起（点头部名字才展开）。v1.25 措辞改「你的
+           名字」（用户：「改名字/昵称」感觉怪怪的）。 -->
       <div class="req-nick" id="reqNickBox" hidden>
-        <label for="nickInput">我的昵称</label>
+        <label for="nickInput">你的名字</label>
         <input id="nickInput" type="text" maxlength="16" placeholder="别人点歌时看到的名字" />
       </div>
             <!-- v1.21.14：创作区收进一张卡（视觉主角），下面紧跟「我的歌」卡 ——
@@ -262,11 +259,9 @@
       <!-- 我的歌：自己的 pending 单置顶，位次 + 预计时间 + 直接操作 -->
       <div class="my-card" id="reqMyCard" hidden></div>
       <p class="req-hint" id="reqHint"></p>
-      <!-- v1.21.29 卡片化：队列自己成一节、自带一层底。小标题不是写死的 ——
-           队列里有分组（我的其它点歌 / 大家在点），标题由 putGroup 按情况塞，
-           写死一个「大家在点」会和它撞车。这一节只在**真有行**时显示。 -->
+      <!-- v1.21.29 卡片化队列。v1.25：「全网 N 首在队 · 你的歌第 X 位」汇总行
+           整行删除（用户：也没啥用）—— 位次只留在「我的歌」卡与队列行上。 -->
       <section class="sec queue-sec" id="reqQueue" hidden>
-        <p class="req-sum" id="reqSum" hidden></p>
         <ul class="req-list" id="reqList"></ul>
       </section>
       <!-- v1.21.29：「我今天点过的」整条链路摘干净（用户原话「这个功能没啥用」，

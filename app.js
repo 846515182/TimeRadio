@@ -2843,30 +2843,26 @@ function bakeWaveBars() {
   waveBars01 = out;
 }
 
-/** 第 [from, to) 个取样点 → **一条连续折线**的 d。
+/** 第 [from, to) 个取样点 → 柱子数组的 d（每根一个 M,L 子路径，72 根）。
  *
- *  用户原话「就像心电图那样 一条线」。旧版每根是独立的 `M x,48-h L x,48+h`，
- *  72 段互不相连的竖线 —— 那不是线，是柱子；安静段半高 0.6px 就成了死横线。
- *  现在整段只在起点写一次 M，之后全是 L，DOM 里读出来就是一条折线
- *  （wave-gate 有一条断言专钉「不许出现第二个 M」）。
+ *  v1.25 统一锚点（用户：「有时候打开 app 那个动画还是以前的」）：
+ *  以前没谱时柱子围着中线 48 上下对称长（镜像波形），一旦拉到频谱侧车
+ *  又突然换成底锚彩虹柱 —— 落差看着就是「旧动画回来了」。现在兜底柱与
+ *  真频谱**同锚同色**：柱底 y=92（EQ_BASE）、同一条彩虹渐变，两条路
+ *  的差别只剩高度来源（轮廓 vs 真谱）。播放头/笔尖一并常驻隐藏（CSS）。
  *
- *  y = 中线 − (轮廓 − 0.5) × 半幅 × 呼吸系数：
- *    轮廓 0 → 贴底、轮廓 1 → 贴顶，线撑满方框；
- *    呼吸系数 = WAVE_FLOOR + (1 − WAVE_FLOOR) × scale，下限 0.7，
- *    所以任何情况下都塌不成一条平线。 */
+ *  h = (0.5 + 0.5×轮廓) × WAVE_SWING × 呼吸系数：
+ *    轮廓 0 → 0.5×88×0.8 = 35.2（方框 35%，不塌成线）；
+ *    轮廓 1 → 1.0×88×1.0 = 88（顶到边，上下各留 4px 余量）。 */
 function waveBars(from, to, scale) {
   let d = '';
   const hs = waveBars01;
   if (!hs) return d;
-  /* 柱子高度 = (0.5 + 0.5×轮廓) × 最大高度 × 呼吸系数。
-   * 轮廓 0 → 高度 0.5×88×0.8 = 35.2（方框 35%，不塌成线）；
-   * 轮廓 1 → 高度 1.0×88×1.0 = 88（方框 88%，留 4px 边距）。
-   * 中间对称：柱顶 = 中线 − 半高，柱底 = 中线 + 半高。 */
   const br = 0.8 + 0.2 * scale;
   for (let i = from; i < to; i++) {
-    const h = (0.5 + 0.5 * hs[i]) * (WAVE_SWING / 2) * br;
-    d += 'M' + WAVE_BAR_X[i] + ',' + (WAVE_MID - h)
-       + 'L' + WAVE_BAR_X[i] + ',' + (WAVE_MID + h);
+    const h = (0.5 + 0.5 * hs[i]) * WAVE_SWING * br;
+    d += 'M' + WAVE_BAR_X[i] + ',' + (EQ_BASE - h)
+       + 'L' + WAVE_BAR_X[i] + ',' + EQ_BASE;
   }
   return d;
 }
@@ -3101,10 +3097,11 @@ function eqMode(on) {
     }
   } catch (_) { /* 老内核没有 classList 也绝不拖垮渲染 */ }
   if (!wavePaths) wavePaths = collectWaves();
-  const y = on ? EQ_BASE : WAVE_MID;
+  /* v1.25：零位线常驻柱底 y=92 —— 兜底轮廓与真频谱同锚（见 waveBars 注释），
+   * 不再随 .eq 开关在中线/柱底之间跳。 */
   for (let i = 0; i < wavePaths.length; i++) {
     const w = wavePaths[i];
-    if (w.base) { w.base.setAttribute('y1', y); w.base.setAttribute('y2', y); }
+    if (w.base) { w.base.setAttribute('y1', EQ_BASE); w.base.setAttribute('y2', EQ_BASE); }
   }
 }
 
@@ -3173,19 +3170,19 @@ function drawWaveEQ() {
   }
 }
 
-/* ---------------- 徽章渲染 + 实时在线人数（官方数据优先，MQTT 感知兜底） ----------------
- * 数据源一（优先）：蜻蜓FM 官方 channels 接口的 audience_count，见上方
- *   AUDIENCE_API 模块。取到就显示，并点亮徽章上的「官方」角标。
- * 数据源二（兜底）：公共 MQTT 在线感知，零服务器 ——
+/* ---------------- 实时在线人数（公共 MQTT presence，零服务器） ----------------
  * 原理：每个客户端用稳定 clientId 连上 broker，向 fm891-radio/online/<cid>
- * 发布 retain 心跳；全体订阅 fm891-radio/online/#，收到的 retained 条目数
- * 即当前在线人数。断线时 broker 用遗嘱（LWT，空载荷）自动删除自己的条目，
- * 对端收到空载荷转发 → 立刻从计数中移除。
+ * 发布 retain 心跳；全体订阅 fm891-radio/online/#，按频道名去重计数。
+ * 断线时 broker 用遗嘱（LWT，空载荷）转发下线，对端立刻从计数中移除。
  * 时间戳一律用本地接收时间（peer 时钟不可信）；120 秒未见心跳视为过期。
- * 主用 EMQX（国内快），失败降级 Mosquitto 公共 WSS，一轮全败 45 秒后重试。
- * 徽章状态自见即显：… 加载中 / 数字在线 / – 线路暂不可用（绝不整体隐藏）。
- * 关键防护：所有事件回调校验 client !== c，杜绝旧连接迟到事件误杀新连接
- *（v1.10 的 offline+close 双事件竞态导致切换后彻底静默，此为根因修复）。
+ * v1.25（用户：「在线除了默认人数 其他人数都要统计叠加准确」）：
+ *   ① 双线路并联 —— mosquitto + emqx 同时在听，同一设备跨线同频道去重，
+ *      不再出现「连 A 线看不见 B 线的人」的少报；
+ *   ② 本机只算一次 —— 老版把自己记进 peers、读数又 +1，一个人开 app
+ *      顶栏直接 235+2（用户嘴里的「乖乖的」）；
+ *   ③ 徽章在顶栏 #hdrOnline（「在线 N」一行），渲染归 hdrOnline 模块，
+ *      本模块只出数据（window.__fmPresence）并广播 fm891-presence 事件；
+ *   ④ 蜻蜓官方 audience_count 徽章已随台单下架，pillRender 留空函数保底。
  */
 (function onlinePresence() {
   try {
@@ -3194,11 +3191,13 @@ function drawWaveEQ() {
     const NS = 'fm891-radio/online';
     const HEARTBEAT = 30000;
     const STALE = 120000;
-    // 排序即优先级：mosquitto 放第一 —— 实测它在被 fake-IP 污染的网络里
-    // 仍能建立 TCP，而 emqx 一旦被本地 DNS 漏掉就是「秒拒连」，等满 9 秒才切线太亏。
-    // **必须与 server.py 的 BROKERS 完全同集**（服务器是 emqx+mosquitto 两条）：
-    // 少一条服务器不在的线路 —— 客户端连上它会显示「已上线」，却永远收不到
-    // 服务器发的队列/进度，比直接连不上还难查。
+    /* **必须与 server.py 的 BROKERS 完全同集**（服务器是 emqx+mosquitto 两条）：
+     * 少一条服务器不在的线路 —— 客户端连上它会显示「已上线」，却永远收不到
+     * 服务器发的队列/进度，比直接连不上还难查。
+     * v1.25 改**双线路并联**：以前是单连接轮换换线 —— 连上 mosquitto 的人
+     * 看不见连 emqx 的人，两条线各数各的，在线人数永远少报。现在两条线各挂
+     * 一条 presence 连接、同时在听；peers 以频道名（NS/<cid>）为键，同一台
+     * 设备两条线上的频道名相同，跨线天然去重。 */
     const BROKERS = [
       'wss://test.mosquitto.org:8081/mqtt',
       'wss://broker.emqx.io:8084/mqtt',
@@ -3216,209 +3215,119 @@ function drawWaveEQ() {
     }
 
     const myTopic = NS + '/' + cid;
+    /* peers 只记**别人**（本机不进表）。老版 publishPresence 把自己也记进
+     * peers、__fmPresence 又 +1 本机 —— 一个人开 app 顶栏直接 235+2。 */
     const peers = {};
-    const pill = $('onlinePill');
-    const countEl = $('onlineCount');
-    const srcEl = $('onlineSrc');   // 启动时取一次：晚到的渲染不再碰 document（关窗后它已不可用）
-    let client = null;
-    let brokerIdx = 0;
-    let lastSwitchAt = 0;   // 换线冷却：两条线路同时秒拒时，别把 CPU 烧在建连上
-    let gotConnect = false;
-    let switching = false;
-    let attempt = 0;
-    let failTimer = null;
-    let state = 'connecting'; // connecting | online | failed
+    const lines = [];              // 每条线路一个 {url, c, got}
+    let anyOnline = false;
 
-    /* v1.21.12：点歌台头部要显示「N 人一起点歌」—— 协同这件事得让人看得见，
-     * 否则一个人孤零零地对着输入框，不知道还有没有别人在点。数据源就是本模块
-     * 的 presence 感知（连着同一个点歌台的客户端，含本机）；没连上返回 0，
-     * 由调用方显示「正在数人…」，绝不显示 0 人。 */
+    /* 真实在线数（含本机）：一条线都没连上返回 0 —— 顶栏保持默认 235，
+     * 绝不显示 0/空。心跳 30s、过期 120s（容忍丢两拍）。 */
     window.__fmPresence = () => {
-      if (state !== 'online') return 0;
+      if (!anyOnline) return 0;
       const now = Date.now();
-      let n = 1;                       // 本机也在里面
+      let n = 1;                               // 本机（任一条线在场即算）
       Object.keys(peers).forEach((k) => { if (now - peers[k] <= STALE) n++; });
       return n;
     };
 
-    function render() {
-      if (!pill || !countEl) return;
-      const src = srcEl;
-
-      /* ① 官方数据：蜻蜓FM 官方 audience_count，带「官方」角标 */
-      if (officialState === 'ok') {
-        countEl.textContent = fmtAudience(officialCount);
-        if (src) src.hidden = false;
-        pill.hidden = false;
-        pill.classList.remove('dim');
-        pill.title = '在线人数来自蜻蜓FM 官方接口（该频道实时收听人数）';
-        return;
-      }
-      if (src) src.hidden = true;
-      pill.removeAttribute('title');
-
-      /* ② 正在取官方数据：先显示加载态，绝不拿旧台的数字或本机计数充数 */
-      if (officialState === 'loading') {
-        countEl.textContent = '…';
-        pill.hidden = false;
-        pill.classList.remove('dim');
-        return;
-      }
-
-      /* ③ 官方数据取不到 → 降级回本机 MQTT 在线感知 */
-      if (state === 'online') {
-        const now = Date.now();
-        let n = 0;
-        Object.keys(peers).forEach((k) => {
-          if (now - peers[k] <= STALE) n++;
-        });
-        countEl.textContent = String(n);
-        if (officialState === 'fail') pill.title = '在线听友数（本机实时感知）';
-      } else if (state === 'connecting') {
-        countEl.textContent = '…';
-      } else {
-        countEl.textContent = '–';
-      }
-      pill.hidden = false;
-      try { pill.classList.toggle('dim', state === 'failed'); } catch (_) { /* 忽略 */ }
+    /* 人数/连接状态可能变了：顶栏徽章收到事件立刻重画，不必等 30 秒巡检。 */
+    function bump() {
+      try {
+        let e;
+        try { e = new Event('fm891-presence'); } catch (_) {
+          e = document.createEvent('Event');   // 老内核没有 new Event()
+          e.initEvent('fm891-presence', false, false);
+        }
+        window.dispatchEvent(e);
+      } catch (_) { /* 忽略 */ }
     }
-    pillRender = render;   // 官方数据模块换台后也走同一次渲染，两个源不会互相覆盖
-
-    function publishPresence() {
-      peers[myTopic] = Date.now();
-      if (client && gotConnect) {
-        try {
-          client.publish(myTopic, JSON.stringify({ t: peers[myTopic] }), { retain: true, qos: 0 });
-        } catch (_) { /* 忽略 */ }
-      }
-      render();
+    function refreshAny() {
+      const was = anyOnline;
+      anyOnline = false;
+      for (let i = 0; i < lines.length; i++) { if (lines[i].got) { anyOnline = true; break; } }
+      if (was !== anyOnline) bump();
+    }
+    function publishOn(l) {
+      if (!l || !l.c || !l.got) return;
+      try {
+        l.c.publish(myTopic, JSON.stringify({ t: Date.now() }), { retain: true, qos: 0 });
+      } catch (_) { /* 忽略 */ }
+    }
+    function publishAll() {
+      for (let i = 0; i < lines.length; i++) publishOn(lines[i]);
+      bump();
     }
 
-    function clearFailTimer() {
-      if (failTimer) { clearTimeout(failTimer); failTimer = null; }
-    }
+    /* pillRender 兼容位：上方 AUDIENCE_API（蜻蜓官方人数）模块换台后会调它
+     * 重画老徽章。老徽章（#onlinePill）v1.24 已随台单下架 —— 空函数保底，
+     * 调用方不用判空，也不再碰不存在的 DOM。 */
+    pillRender = function () {};
 
-    function switchBroker() {
-      if (switching) return;
-      // 换线冷却 700ms：错误风暴下（多条线路一起拒）不至于疯狂重建连接
-      const _now = Date.now();
-      if (_now - lastSwitchAt < 700) return;
-      lastSwitchAt = _now;
-      switching = true;
-      clearFailTimer();
-      const prev = client;
-      client = null;
-      gotConnect = false;
-      attempt = 0;
-      try { if (prev) prev.end(true); } catch (_) { /* 忽略 */ }
-      const next = brokerIdx + 1;
-      if (next >= BROKERS.length) {
-        // 本轮线路全部失败 → 显示 –，45 秒后从头轮换重试
-        state = 'failed';
-        render();
-        setTimeout(() => {
-          brokerIdx = 0;
-          switching = false;
-          state = 'connecting';
-          render();
-          connectAt();
-        }, 45000);
-      } else {
-        brokerIdx = next;
-        connectAt();
-      }
-    }
-
-    function connectAt() {
+    /* 每条线路独立建连、各自按 reconnectPeriod 自愈 —— 不再做「单连接轮换
+     * 换线」：双线并联下任何一条活着就能数人，两条全挂才回落默认 235。 */
+    BROKERS.forEach((url) => {
+      const l = { url: url, c: null, got: false };
+      lines.push(l);
       let c;
       try {
-        c = mqtt.connect(BROKERS[brokerIdx], {
-          clientId: cid,
+        c = mqtt.connect(url, {
+          clientId: cid,     // 稳定身份（request.js 那条是 myId + '-q'，不冲突）
           keepalive: 30,
           reconnectPeriod: 5000,
           connectTimeout: 8000,
           clean: true,
+          // 遗嘱 = 空载荷 retained：设备掉线，该线的对端立刻把它划掉
           will: { topic: myTopic, payload: '', retain: true, qos: 0 },
         });
-      } catch (_) {
-        switchBroker();
-        return;
-      }
-      client = c;
-      switching = false;
-      render();
-
-      // 静默黑洞兜底：9 秒连不上换线路（身份校验防误伤新连接）
-      failTimer = setTimeout(() => {
-        if (client === c && !gotConnect) switchBroker();
-      }, 9000);
-
+      } catch (_) { return; }    // 这条线建都不起来：另一条照常干活
+      l.c = c;
       c.on('connect', () => {
-        if (client !== c) return; // 过期连接，忽略
-        clearFailTimer();
-        gotConnect = true;
-        attempt = 0;
-        state = 'online';
+        l.got = true;
         try { c.subscribe(NS + '/#', { qos: 0 }); } catch (_) { /* 忽略 */ }
-        publishPresence();
+        publishOn(l);
+        refreshAny();
       });
       c.on('message', (topic, payload, packet) => {
-        if (client !== c || topic === myTopic) return;
+        if (topic === myTopic) return;        // 自己的心跳（含回环）不计
         try {
           const s = payload ? payload.toString() : '';
-          if (!s) { delete peers[topic]; render(); return; }   // 空载荷 = 对方已下线
+          if (!s) { delete peers[topic]; bump(); return; }   // 空载荷 = 对方下线
           let t = Date.now();
           if (packet && packet.retain) {
-            // retained 回放：信远端时间戳 → 历史残留条目按时过期，不会永续计数
+            // retained 回放：信远端时间戳 → 历史残留按时过期，不会永续计数
             try {
               const o = JSON.parse(s);
               if (o && typeof o.t === 'number') t = o.t;
             } catch (_) { /* 解析失败则按收到处理 */ }
           }
-          // 实时心跳用本地时间（发送方时钟不可信时也不误伤）
+          // 实时心跳用本地接收时间（发送方时钟不可信时也不误伤）；
+          // 跨线同名频道写同一个键 —— 两条线上都听到的人只算一次。
           peers[topic] = t;
-          render();
+          bump();
         } catch (_) { /* 忽略 */ }
       });
-      c.on('close', () => {
-        if (client !== c) return; // ★ 根因修复：旧连接迟到事件不得触发光换
-        if (gotConnect) { state = 'connecting'; render(); } // 自动重连中
-        else switchBroker();
-      });
-      c.on('offline', () => {
-        if (client !== c) return; // ★ 同上（offline 与 close 常连发）
-        if (gotConnect) { state = 'connecting'; render(); }
-        else switchBroker();
-      });
-      c.on('reconnect', () => {
-        if (client !== c) return;
-        attempt++;
-        if (attempt >= 6) switchBroker(); // 同一线路反复失败 → 轮换
-      });
-      c.on('error', () => {
-        // 秒切：压根没建立起来的连接（DNS 被 fake-IP 污染 = 秒拒/秒超时）
-        // 没必要等满 9 秒黑洞超时才换线 —— 那 9 秒里用户看到的是「点歌台线路不稳」。
-        // 连上过（gotConnect）才交给 reconnect 自己恢复，不抢它的重试。
-        if (client !== c || gotConnect) return;
-        switchBroker();
-      });
-    }
-
-    // 启动即显示徽章（连接中 …），状态由 render 驱动，永不整体隐藏
-    render();
-    connectAt();
-    setInterval(publishPresence, HEARTBEAT);
-    setInterval(render, 10000);
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) publishPresence();
+      c.on('close', () => { l.got = false; refreshAny(); });
+      c.on('offline', () => { l.got = false; refreshAny(); });
+      // error 不做动作：没连上过交给 reconnectPeriod 自动重试，连上过的交给
+      // close/offline 置位 —— 不再有「换线冷却/9 秒黑洞超时」那套。
+      c.on('error', () => { /* 静默；状态一律以 close/offline 为准 */ });
     });
+
+    /* 启动先广播一帧（徽章文案「在线 N」不依赖 presence 连上），随后事件 + 巡检刷新 */
+    setInterval(publishAll, HEARTBEAT);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) publishAll();
+    });
+    bump();
   } catch (_) { /* 可选功能，失败静默 */ }
 })();
 
-/* ---------------- 顶栏在线人数（v1.24） ----------------
- * 用户原话「APP界面设一个在线人数 默认235 真实的在线就继续往上加」：
- * 默认显示 235；presence 感知到真实在线听友就在此之上实时累加（235 + n）。
- * 没连上 presence（线路不可用/还在握手）就保持 235 —— 徽章绝不显示 0/空。 */
+/* ---------------- 顶栏在线人数（v1.24 立项，v1.25 收敛为一行） ----------------
+ * 用户原话「就写个在线 然后数量不好吗 一行就好了」：徽章就显示「在线 N」。
+ * 默认 235；presence 感知到真实在线听友就在此之上实时累加（235 + n），
+ * 线路不可用也保持 235 —— 徽章绝不显示 0/空。
+ * presence 模块广播 fm891-presence 事件 → 立刻重画；30 秒巡检兜底。 */
 (function hdrOnline() {
   const BASE = 235;
   function paint() {
@@ -3430,6 +3339,7 @@ function drawWaveEQ() {
       el.textContent = String(BASE + (n > 0 ? n : 0));
     } catch (_) { /* 忽略：徽章渲染不许打断播放器 */ }
   }
+  try { window.addEventListener('fm891-presence', paint); } catch (_) { /* 忽略 */ }
   setInterval(paint, 30000);
   paint();
 })();
