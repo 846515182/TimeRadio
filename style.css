@@ -101,13 +101,6 @@ body {
   50% { box-shadow: 0 0 12px rgba(52, 211, 153, 0.55); }
 }
 
-.slogan {
-  margin: 8px 0 0;
-  font-size: 11px;
-  letter-spacing: 4px;
-  color: var(--muted);
-}
-
 /* 实时在线人数徽章（官方数据优先：蜻蜓FM 官方 audience_count；取不到时降级
  * 公共 MQTT 在线感知。状态全程可见：… 加载中 / 数字在线 / – 线路暂不可用） */
 
@@ -1004,7 +997,6 @@ body.playing .stage h1 {
 .brand { gap: 8px; padding: 4px 12px 4px 4px; }
 .brand-logo { font-size: 20px; }
 .brand-avatar { width: 34px; height: 34px; }
-.slogan { margin: 5px 0 0; }
 
 /* —— ① 压紧：播放器卡片 —— */
 .player {
@@ -1384,18 +1376,14 @@ footer { margin-top: 14px; }
   box-shadow: 0 0 10px rgba(34, 211, 238, .35);
 }
 
-/* .brand-logo / .slogan 都必须用**显式 margin** 留间距：实测这台 WebView 的
-   flex `gap` 根本不参与布局（computed 显示 8px/9px，实际子元素间距 0 —— 运行时
-   实验证明 gapPushed=0），说明它低于 Chrome 84（flex gap 是 84 才加入的）。
-   以前只写 gap，于是台标胶囊的光晕直接压在 slogan 第一个字上。 */
-.brand-logo { font-size: 16px; margin-left: 8px; }
-
-.slogan {
-  margin: 0 0 0 14px;
-  font-size: 9.5px;
-  letter-spacing: .5px;
-  opacity: .62;
-}
+/* .brand-logo 必须用**显式 margin** 留间距：实测这台 WebView 的 flex `gap`
+   根本不参与布局（computed 显示 8px，实际子元素间距 0 —— 运行时实验证明
+   gapPushed=0），说明它低于 Chrome 84（flex gap 是 84 才加入的）。以前只写
+   gap，于是台标胶囊的光晕直接压在第一个字上。
+   （注意：slogan 本轮已连元素带样式整块删除，见 index.html。） */
+/* white-space: nowrap —— 用户原话「时光电台四个字为啥要换两行」：这台机宽
+   下「时光电台」会被 flex 挤压后按 CJK 任意断行折成两半，钉死不换行。 */
+.brand-logo { font-size: 16px; margin-left: 8px; white-space: nowrap; }
 
 /* 徽章整排撤掉后不再占任何空间 */
 
@@ -2613,8 +2601,12 @@ body.track-change #cover {
   padding: 3px 10px; border-radius: 999px; font-size: 12px;
   color: #9ff5cf; background: rgba(34,197,120,.16);
   border: 1px solid rgba(34,197,120,.28);
+  /* nowrap —— 用户原话「在线236 不要换行」：窄屏下「在线」与数字会被拆到
+     两行，钉死单行；圆点也缩不得。 */
+  white-space: nowrap; flex: none;
 }
 .online-pill .online-dot {
   width: 6px; height: 6px; border-radius: 50%; background: #34d399;
   box-shadow: 0 0 6px rgba(52,211,153,.9);
+  flex: none;
 }
