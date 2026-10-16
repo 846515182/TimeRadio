@@ -1349,7 +1349,9 @@ footer { margin-top: 14px; }
 .top {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  /* 用户原话「在线为啥不是在最右边 靠近时光电台好看吗」：台标贴左、在线
+     徽章顶到最右，两头分开（space-between），别挤在一起。 */
+  justify-content: space-between;
   gap: 9px;
   padding: 2px 2px 0;
   text-align: left;
