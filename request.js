@@ -582,7 +582,7 @@
       if (Array.isArray(msg.cands)) {
         rec.cands = msg.cands
           .filter((c) => c && c.n)
-          .slice(0, 6)
+          .slice(0, 7)   // v1.25.4：本地仓库那条 + 平台最多 6 条，共 7
           .map((c) => ({
             n: String(c.n),
             t: String(c.t || '').slice(0, 40),
@@ -590,6 +590,10 @@
             a: String(c.a || '').slice(0, 20),   // 歌手（单独一列，便于一眼认原唱）
             d: Math.max(0, Number(c.d) || 0),    // 时长秒（v1.21.26）：候选行显示 4:32
             best: !!c.best,
+            /* v1.25.4：本地仓库(1) / 未下载(0)。**必须在这里显式带出来** ——
+               这个 map 是「逐字段拷贝」，服务器下发的新字段不写进来就会被丢掉
+               （v1.25.3 的 in 就是这么丢的：本地那条到了客户端全被当成未下载）。 */
+            in: Number(c.in) === 1 ? 1 : 0,
           }));
       }
       prog.set(id, rec);
