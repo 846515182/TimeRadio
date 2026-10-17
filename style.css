@@ -1222,6 +1222,24 @@ footer { margin-top: 14px; }
 }
 .req-cand.on .req-cand-dot { color: #f472b6; }
 .req-cand.on b { color: #fff; }
+/* v1.25.3：候选行「本地仓库 / 未下载」标记 —— 本地那份挑中就直接播、不必下 */
+.req-cand-tag {
+  flex: none;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.req-cand-local { color: #06281c; background: rgba(52, 211, 153, .92); }
+.req-cand-cloud {
+  color: rgba(255, 255, 255, .68);
+  background: rgba(255, 255, 255, .08);
+  border: 1px solid rgba(255, 255, 255, .18);
+}
+/* 本地那份左侧一道绿边：扫一眼就知道哪条不用下 */
+.req-cand.cand-local { box-shadow: inset 3px 0 0 rgba(52, 211, 153, .95); }
 /* 确定按钮：选完必须有一个明确的「就这样」动作 + 看得见的结果 */
 .req-cand-ok {
   min-height: 46px;

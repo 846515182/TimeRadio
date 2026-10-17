@@ -156,10 +156,17 @@
       }
       const cur = String(picking[it.id] || it.pick || '');
       if (candHint) {
+        /* v1.25.3：挑中的若是「本地仓库」那条，文案别说「正按这版下」——
+           本地那份本来就在播，挑它是「就用这份」，不是下载。 */
+        const _pc = (it.cands || []).find(
+          (c) => String(c.n) === String(it.pick || cur));
+        const _local = !!(_pc && Number(_pc.in) === 1);
         candHint.textContent = it.pick
-          ? ('已确认第 ' + candPos(it, it.pick) + ' 版 · 正按这版下')
+          ? (_local ? '已确认：就用本地仓库这版（已在播，不必下）'
+                    : ('已确认第 ' + candPos(it, it.pick) + ' 版 · 正按这版下'))
           : (cur
-            ? ('挑好了：第 ' + candPos(it, cur) + ' 版 · 点「确认」下这一版')
+            ? (_local ? '挑好了：本地仓库这版 · 点「确认」直接播这份'
+                      : ('挑好了：第 ' + candPos(it, cur) + ' 版 · 点「确认」下这一版'))
             : '挑一个版本再点「确认」（没人替你选，不点就一直等你）');
       }
       candList.textContent = '';
@@ -167,7 +174,8 @@
         const on = cur === String(cd.n);
         const row = document.createElement('button');
         row.type = 'button';
-        row.className = 'req-cand' + (on ? ' on' : '') + (cd.best ? ' best' : '');
+        row.className = 'req-cand' + (on ? ' on' : '') + (cd.best ? ' best' : '')
+                      + (Number(cd.in) === 1 ? ' cand-local' : '');
         const dot = document.createElement('i');
         dot.className = 'req-cand-dot';
         dot.textContent = on ? '●' : '○';
@@ -188,6 +196,14 @@
           dt.textContent = du;
           row.appendChild(dt);
         }
+        /* v1.25.3：本地仓库 / 未下载 —— 服务端给每条候选带 in
+           （1=仓库已有这份，挑它直接播、不必下；0=平台搜回来的，要下载）。
+           老服务端没这个字段时 Number(undefined) 是 NaN，按「未下载」渲染，不崩。 */
+        const isLocal = Number(cd.in) === 1;
+        const tg = document.createElement('span');
+        tg.className = 'req-cand-tag ' + (isLocal ? 'req-cand-local' : 'req-cand-cloud');
+        tg.textContent = isLocal ? '本地' : '未下载';
+        row.appendChild(tg);
         row.addEventListener('click', (ev) => {
           ev.stopPropagation();
           picking[it.id] = String(cd.n);   // 只是本地选中，点确定才发出去
@@ -1072,7 +1088,9 @@
       delete picking[it.id];           // 已经发出去了，别再留着当「待确认」
       publish(true);
       render();
-      say('好，就下第 ' + candPos(it, num) + ' 版');
+      const _local = !!(cd && Number(cd.in) === 1);
+      say(_local ? '好，就播本地仓库这版'
+                 : ('好，就下第 ' + candPos(it, num) + ' 版'));
     }
 
     function publish(force) {
