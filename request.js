@@ -263,6 +263,26 @@
       return true;
     }
 
+    /* v1.25.4：撤单**二次确认** —— 防误触。歌一旦撤了就没了（正在放的也会被下架），
+     * 实测一不小心就把整单撤了（《遇君》那次）。两个会撤单的入口 —— 弹窗里的
+     * 「取消点歌」按钮、歌卡/队列行右侧的 ✕ —— 都先过这一道。
+     * 拿不到 window.confirm（极老环境 / 未打桩）时直接放行，别把撤单功能卡死。 */
+    function confirmCancel(it) {
+      const title = String((it && it.title) || '这首歌').slice(0, 12);
+      try {
+        if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+          if (!window.confirm('确定取消《' + title + '》的点歌？')) return false;
+        }
+      } catch (_) { /* 对话框不可用就照撤，不拦 */ }
+      return true;
+    }
+    /* 带确认的撤单：用户点头了才真撤。返回 true 表示确实撤掉了。 */
+    function cancelRequestAsk(it) {
+      if (!it) return false;
+      if (!confirmCancel(it)) return false;
+      return cancelRequest(it);
+    }
+
     /* ---------------- 主播气泡（打字机 + 播报队列） ---------------- */
     const djText = $('djText');
     let sayQueue = [];
@@ -1336,7 +1356,7 @@
         xb.setAttribute('aria-label', '取消点歌');
         xb.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          cancelRequest(it);
+          cancelRequestAsk(it);          // v1.25.4：先二次确认，防误触
         });
         li.appendChild(xb);
       }
@@ -1415,7 +1435,7 @@
             xb.className = 'req-x';
             xb.textContent = '✕';
             xb.setAttribute('aria-label', '取消点歌');
-            xb.addEventListener('click', (ev) => { ev.stopPropagation(); cancelRequest(topMine); });
+            xb.addEventListener('click', (ev) => { ev.stopPropagation(); cancelRequestAsk(topMine); });
             acts.appendChild(xb);
           }
           myCard.appendChild(head);
@@ -1632,7 +1652,7 @@
     });
     if (candCancel) candCancel.addEventListener('click', () => {
       const it = items.get(candFor);
-      if (it && isOwnReq(it)) cancelRequest(it);
+      if (it && isOwnReq(it)) cancelRequestAsk(it);   // v1.25.4：先二次确认
       else closeCandModal(true);
     });
     if (candMask) candMask.addEventListener('click', (ev) => {
@@ -1783,6 +1803,7 @@
       sweepDone: sweepDone, noteMiss: noteMiss, tombstone: tombstone,
       /* v1.21.11 选版弹窗 + 中途撤单：要能被测试直接驱动 */
       cancelRequest: cancelRequest, openCandModal: openCandModal,
+      cancelRequestAsk: cancelRequestAsk,   // v1.25.4：带二次确认的撤单
       closeCandModal: closeCandModal, maybeOpenCand: maybeOpenCand,
       /* 播报闸门要看队列长度才能验（第一条会被立刻取走开始打字，长度变 0） */
       sayQueueLen: () => sayQueue.length,
