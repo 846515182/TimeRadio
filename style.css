@@ -1200,6 +1200,12 @@ footer { margin-top: 14px; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* 歌手未知占位（2026-10-18）：与真歌手同一位置，弱化配色别抢眼 */
+.req-cand em.req-cand-unknown {
+  color: rgba(255, 255, 255, .5);
+  background: rgba(255, 255, 255, .06);
+  border-color: rgba(255, 255, 255, .16);
+}
 .req-cand-dot {
   flex: none;
   font-style: normal;

@@ -183,11 +183,16 @@
         nm.textContent = String(cd.s || cd.t || '').slice(0, 18);
         row.appendChild(dot);
         row.appendChild(nm);
+        /* 歌手列（2026-10-18）：为空也占位显示「未知歌手」，别留白缺一块。
+           与真歌手名同位置同尺寸，只是弱化配色（.req-cand-unknown）。 */
+        const ar = document.createElement('em');
         if (cd.a) {
-          const ar = document.createElement('em');
           ar.textContent = String(cd.a).slice(0, 12);
-          row.appendChild(ar);
+        } else {
+          ar.textContent = '未知歌手';
+          ar.className = 'req-cand-unknown';
         }
+        row.appendChild(ar);
         /* 时长（有才显示，0 = 老批候选没带数据，不占位） */
         const du = fmtDur(cd.d);
         if (du) {

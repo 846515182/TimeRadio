@@ -1,5 +1,5 @@
 /* 时光电台 — Service Worker（应用外壳离线缓存） */
-const CACHE = 'fm891-v86';
+const CACHE = 'fm891-v87';
 
 const SHELL = [
   './',
