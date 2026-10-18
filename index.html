@@ -182,7 +182,9 @@
     <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="updTitle">
       <h3 id="updTitle">发现新版本 🎉</h3>
       <p class="dialog-ver" id="updVer"></p>
-      <p class="dialog-body" id="updBody"></p>
+      <!-- v1.25.6：更新弹窗不再显示「更新说明」原文（用户原话「那些字一点
+           都不专业」）。只留版本号 + 进度条；GitHub Release 说明照旧留档
+           给自己看，不进 App。 -->
       <div class="upd-progress" id="updProgress" hidden>
         <div class="upd-bar"><i id="updBar"></i></div>
         <p class="upd-pct" id="updPct">0%</p>

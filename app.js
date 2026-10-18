@@ -2465,7 +2465,7 @@ function currentVersion() {
       if (v) return v;
     }
   } catch (_) { /* 忽略 */ }
-  return '1.25.5'; // 网页版：与 manifest versionName 同步维护
+  return '1.25.6'; // 网页版：与 manifest versionName 同步维护
 }
 
 let updateUrl = '';
@@ -2541,7 +2541,8 @@ async function checkUpdate(silent) {
     const mask = $('updateMask');
     if (mask) {
       $('updVer').textContent = 'v' + cur + ' → ' + remote;
-      $('updBody').textContent = String(rel.body || rel.name || '').slice(0, 300);
+      // v1.25.6：不再往弹窗里塞「更新说明」原文（用户原话「一点都不专业」）。
+      // App 只显示版本号 + 进度条；说明留在 GitHub Release，不进 App。
       setUpdateState('idle');
       mask.hidden = false;
     } else if (!silent) {
